@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/spring2maz/replayq.svg?branch=master)](https://travis-ci.org/spring2maz/replayq)
+[![Build Status](https://travis-ci.org/spring2maz/replayq.svg?branch=master)](https://travis-ci.org/spring2maz/replayq) [![Coverage Status](https://coveralls.io/repos/github/spring2maz/replayq/badge.svg?branch=master)](https://coveralls.io/github/spring2maz/replayq?branch=master)
 
 # ReplayQ
 
