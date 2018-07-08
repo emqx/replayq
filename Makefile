@@ -37,3 +37,6 @@ hex: clean
 cover:
 	@rebar3 cover -v
 
+.PHONY: coveralls
+coveralls:
+	@rebar3 coveralls send

@@ -20,4 +20,5 @@ script:
  - make xref
  - make dialyzer
  - make cover
+ - make coveralls
 
