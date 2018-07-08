@@ -78,13 +78,18 @@ commit_in_the_middle_test() ->
   Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
   Q2 = replayq:append(Q1, [<<"item3">>]),
   {Q3, AckRef1, Items1} = replayq:pop(Q2, #{count_limit => 1}),
+  ?assertEqual(2, replayq:count(Q3)),
+  ?assertEqual(10, replayq:bytes(Q3)),
   timer:sleep(200),
   ok = replayq:ack(Q3, AckRef1),
+  ?assertEqual(2, replayq:count(Q3)),
   ?assertEqual([<<"item1">>], Items1),
   ok = replayq:close(Q3),
   Q4 = replayq:open(Config),
   {Q5, _AckRef2, Items2} = replayq:pop(Q4, #{count_limit => 1}),
   ?assertEqual([<<"item2">>], Items2),
+  ?assertEqual(1, replayq:count(Q5)),
+  ?assertEqual(5, replayq:bytes(Q5)),
   ok = replayq:close(Q5),
   ok = cleanup(Dir).
 
