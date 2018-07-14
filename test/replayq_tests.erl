@@ -51,6 +51,7 @@ append_pop_test() ->
   ok = replayq:close(Q5),
   Q6 = replayq:open(Config),
   ?assert(replayq:is_empty(Q6)),
+  ?assertEqual(empty, replayq:peek(Q6)),
   ?assertEqual({Q6, nothing_to_ack, []}, replayq:pop(Q6, #{})),
   ok = replayq:ack(Q6, nothing_to_ack),
   replayq:close(Q6),

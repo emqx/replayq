@@ -1,7 +1,7 @@
 -module(replayq).
 
 -export([open/1, close/1]).
--export([append/2, pop/2, ack/2]).
+-export([append/2, pop/2, ack/2, peek/1]).
 -export([count/1, bytes/1, is_empty/1]).
 
 -export([committer_loop/2]).
@@ -133,6 +133,11 @@ pop(Q, Opts) ->
   Count = maps:get(count_limit, Opts, ?DEFAULT_POP_COUNT_LIMIT),
   true = (Count > 0),
   pop(Q, Bytes, Count, ?NOTHING_TO_ACK, []).
+
+%% @doc peek the queue front item.
+-spec peek(q()) -> empty | {value, item()}.
+peek(#{head_items := HeadItems}) ->
+  queue:peek(HeadItems).
 
 %% @doc Asynch-ly write the consumed item Segment number + ID to a file.
 -spec ack(q(), ack_ref()) -> ok.
