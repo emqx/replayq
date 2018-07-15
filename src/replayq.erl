@@ -18,8 +18,9 @@
 -type dir() :: filename().
 -type ack_ref() :: ?NOTHING_TO_ACK | {segno(), ID :: pos_integer()}.
 
--type config() :: #{dir := dir(),
-                    seg_bytes := bytes()
+-type config() :: #{dir => dir(),
+                    seg_bytes => bytes(),
+                    mem_only => boolean()
                    }.
 %% writer cursor
 -type w_cur() :: #{segno := segno(),
@@ -34,10 +35,10 @@
 
 -opaque q() :: #{config := config(),
                  stats := stats(),
-                 w_cur := w_cur(),
-                 committer := pid(),
-                 head_segno := segno(),
-                 head_items := queue:queue(item())
+                 in_mem := queue:queue(item()),
+                 w_cur => w_cur(),
+                 committer =>  pid(),
+                 head_segno => segno()
                 }.
 
 -define(LAYOUT_VSN, 0).
@@ -51,6 +52,11 @@
 -define(STOP, stop).
 
 -spec open(config()) -> q().
+open(#{mem_only := true} = Config) ->
+  #{config => mem_only,
+    stats => #{bytes => 0, count => 0},
+    in_mem => queue:new()
+   };
 open(#{dir := Dir, seg_bytes := _} = Config) ->
   ok = filelib:ensure_dir(filename:join(Dir, "foo")),
   case delete_consumed_and_list_rest(Dir) of
@@ -61,7 +67,7 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
         w_cur => open_segment(Dir, ?FIRST_SEGNO),
         committer => spawn_committer(?FIRST_SEGNO, Dir),
         head_segno => ?FIRST_SEGNO,
-        head_items => queue:new()
+        in_mem => queue:new()
        };
     Segs ->
       LastSegno = lists:last(Segs),
@@ -72,11 +78,12 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
         w_cur => maybe_roll_out_to_new_seg(Dir, LastSegno),
         committer => spawn_committer(hd(Segs), Dir),
         head_segno => hd(Segs),
-        head_items => queue:from_list(HeadItems)
+        in_mem => queue:from_list(HeadItems)
        }
   end.
 
 -spec close(q() | w_cur()) -> ok.
+close(#{config := mem_only}) -> ok;
 close(#{w_cur := W_Cur, committer := Pid}) ->
   MRef = erlang:monitor(process, Pid),
   Pid ! ?STOP,
@@ -90,11 +97,21 @@ close(#{fd := Fd}) ->
   ok = file:close(Fd).
 
 -spec append(q(), [item()]) -> q().
+append(#{config := mem_only,
+         in_mem := InMem,
+         stats := #{bytes := Bytes0, count := Count0}
+        } = Q, Items) ->
+  Count1 = erlang:length(Items),
+  Bytes1 = erlang:iolist_size(Items),
+  Stats = #{count => Count0 + Count1, bytes => Bytes0 + Bytes1},
+  Q#{stats := Stats,
+     in_mem := queue:join(InMem, queue:from_list(Items))
+    };
 append(#{config := #{seg_bytes := BytesLimit, dir := Dir},
          stats := #{bytes := Bytes0, count := Count0},
          w_cur := #{segno := WriterSegno, count := CountInSeg} = W_Cur0,
          head_segno := HeadSegno,
-         head_items := HeadItems0
+         in_mem := HeadItems0
         } = Q, Items0) ->
   Items = assign_id(CountInSeg + 1, Items0),
   IoData = lists:map(fun make_iodata/1, Items),
@@ -121,7 +138,7 @@ append(#{config := #{seg_bytes := BytesLimit, dir := Dir},
     end,
   Q#{stats := Stats,
      w_cur := W_Cur,
-     head_items := HeadItems
+     in_mem := HeadItems
     }.
 
 %% @doc pop out at least one item from the queue.
@@ -136,7 +153,7 @@ pop(Q, Opts) ->
 
 %% @doc peek the queue front item.
 -spec peek(q()) -> empty | {value, item()}.
-peek(#{head_items := HeadItems}) ->
+peek(#{in_mem := HeadItems}) ->
   queue:peek(HeadItems).
 
 %% @doc Asynch-ly write the consumed item Segment number + ID to a file.
@@ -150,9 +167,11 @@ count(#{stats := #{count := Count}}) -> Count.
 
 bytes(#{stats := #{bytes := Bytes}}) -> Bytes.
 
+is_empty(#{config := mem_only, in_mem := All}) ->
+  queue:is_empty(All);
 is_empty(#{w_cur := #{segno := TailSegno},
            head_segno := HeadSegno,
-           head_items := HeadItems
+           in_mem := HeadItems
           } = Q) ->
   Result = ((TailSegno =:= HeadSegno) andalso queue:is_empty(HeadItems)),
   Result = (count(Q) =:= 0). %% assert
@@ -161,14 +180,33 @@ is_empty(#{w_cur := #{segno := TailSegno},
 
 pop(Q, _Bytes, 0, AckRef, Acc) ->
   {Q, AckRef, lists:reverse(Acc)};
-pop(Q, Bytes, Count, AckRef, Acc) ->
+pop(#{config := Cfg} = Q, Bytes, Count, AckRef, Acc) ->
   case is_empty(Q) of
-    true -> {Q, AckRef, lists:reverse(Acc)};
-    false -> pop2(Q, Bytes, Count, AckRef, Acc)
+    true ->
+      {Q, AckRef, lists:reverse(Acc)};
+    false when Cfg =:= mem_only ->
+      pop_mem(Q, Bytes, Count, Acc);
+    false ->
+      pop2(Q, Bytes, Count, AckRef, Acc)
+  end.
+
+pop_mem(#{in_mem := InMem,
+          stats := #{count := TotalCount, bytes := TotalBytes} = Stats
+         } = Q, Bytes, Count, Acc) ->
+  case queue:out(InMem) of
+    {{value, Item}, _} when size(Item) > Bytes andalso Acc =/= [] ->
+      {Q, ?NOTHING_TO_ACK, lists:reverse(Acc)};
+    {{value, Item}, Rest} ->
+      NewQ = Q#{in_mem := Rest,
+                stats := Stats#{count := TotalCount - 1,
+                                bytes := TotalBytes - size(Item)
+                               }
+               },
+      pop(NewQ, Bytes - size(Item), Count - 1, ?NOTHING_TO_ACK, [Item | Acc])
   end.
 
 pop2(#{head_segno := HeadSegno,
-       head_items := HeadItems,
+       in_mem := HeadItems,
        stats := #{count := TotalCount, bytes := TotalBytes} = Stats,
        w_cur := #{segno := WriterSegno}
       } = Q, Bytes, Count, AckRef, Acc) ->
@@ -177,7 +215,7 @@ pop2(#{head_segno := HeadSegno,
       %% taking the head item would cause exceeding size limit
       {Q, AckRef, lists:reverse(Acc)};
     {{value, {Id, Item}}, HeadItemsX} ->
-      Q1 = Q#{head_items := HeadItemsX,
+      Q1 = Q#{in_mem := HeadItemsX,
               stats := Stats#{count := TotalCount - 1,
                               bytes := TotalBytes - size(Item)
                              }
@@ -193,7 +231,7 @@ pop2(#{head_segno := HeadSegno,
 
 read_next_seg(#{config := #{dir := Dir}, head_segno := HeadSegno} = Q) ->
   Q#{head_segno := HeadSegno + 1,
-     head_items := queue:from_list(read_items(Dir, HeadSegno + 1, ?NO_COMMIT_HIST))
+     in_mem := queue:from_list(read_items(Dir, HeadSegno + 1, ?NO_COMMIT_HIST))
     }.
 
 delete_consumed_and_list_rest(Dir0) ->

@@ -30,7 +30,7 @@ reopen_test() ->
   ?assertEqual(10, replayq:bytes(Q2)),
   ok = cleanup(Dir).
 
-append_pop_test() ->
+append_pop_disk_test() ->
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 1},
   Q0 = replayq:open(Config),
@@ -54,12 +54,39 @@ append_pop_test() ->
   ?assertEqual(empty, replayq:peek(Q6)),
   ?assertEqual({Q6, nothing_to_ack, []}, replayq:pop(Q6, #{})),
   ok = replayq:ack(Q6, nothing_to_ack),
-  replayq:close(Q6),
+  ok = replayq:close(Q6),
   ok = cleanup(Dir).
 
-pop_limit_test() ->
+append_pop_mem_test() ->
+  Config = #{mem_only => true},
+  Q0 = replayq:open(Config),
+  Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
+  Q2 = replayq:append(Q1, [<<"item3">>]),
+  {Q3, AckRef, Items} = replayq:pop(Q2, #{count_limit => 5,
+                                          bytes_limit => 1000}),
+  ?assertEqual([<<"item1">>, <<"item2">>, <<"item3">>], Items),
+  %% stop without acking
+  ok = replayq:close(Q3),
+  %% open again expect to receive the same items
+  Q4 = replayq:open(Config),
+  {Q5, AckRef1, Items1} = replayq:pop(Q4, #{count_limit => 5,
+                                            bytes_limit => 1000}),
+  ?assertEqual(empty, replayq:peek(Q5)),
+  ?assertEqual({Q5, nothing_to_ack, []}, replayq:pop(Q5, #{})),
+  ok = replayq:ack(Q5, nothing_to_ack),
+  ok = replayq:close(Q5).
+
+pop_limit_disk_test() ->
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 1},
+  ok = test_pop_limit(Config),
+  ok = cleanup(Dir).
+
+pop_limit_mem_test() ->
+  Config = #{mem_only => true},
+  ok = test_pop_limit(Config).
+
+test_pop_limit(Config) ->
   Q0 = replayq:open(Config),
   Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
   Q2 = replayq:append(Q1, [<<"item3">>]),
@@ -69,8 +96,7 @@ pop_limit_test() ->
   {Q4, _AckRef2, Items2} = replayq:pop(Q3, #{count_limit => 10,
                                              bytes_limit => 1}),
   ?assertEqual([<<"item2">>], Items2),
-  ok = replayq:close(Q4),
-  ok = cleanup(Dir).
+  ok = replayq:close(Q4).
 
 commit_in_the_middle_test() ->
   Dir = ?DIR,
@@ -126,10 +152,6 @@ cleanup(Dir) ->
   ok = file:del_dir(Dir).
 
 data_dir() -> "./test-data".
-
-filename(Dir, Segno) ->
-  Name = lists:flatten(io_lib:format("~10.10.0w."?SUFFIX, [Segno])),
-  filename:join(Dir, Name).
 
 uniq() ->
   {_, _, Micro} = erlang:timestamp(),
