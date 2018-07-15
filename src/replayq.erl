@@ -251,7 +251,7 @@ spawn_committer(HeadSegno, Dir) ->
 committer_loop(HeadSegno, Dir) ->
   receive
     ?COMMIT(Segno, Id) ->
-      IoData = io_lib:format("~p.\n~p.\n", [Segno, Id]),
+      IoData = io_lib:format("~p.\n", [#{segno => Segno, id => Id}]),
       ok = file:write_file(commit_filename(Dir), IoData),
       case Segno > HeadSegno of
         true ->
@@ -272,7 +272,7 @@ get_commit_hist(Dir) ->
   CommitFile = commit_filename(Dir),
   case filelib:is_regular(CommitFile) of
     true ->
-      {ok, [Segno, Id]} = file:consult(CommitFile),
+      {ok, [#{segno := Segno, id := Id}]} = file:consult(CommitFile),
       {Segno, Id};
     false ->
       ?NO_COMMIT_HIST
