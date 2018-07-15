@@ -214,7 +214,9 @@ delete_consumed_and_list_rest(Dir0) ->
 find_segnos_to_delete(_Dir, Segnos, ?NO_COMMIT_HIST) -> {[], Segnos};
 find_segnos_to_delete(Dir, Segnos0, {CommittedSegno, CommittedId}) ->
   {SegnosToDelete, Segnos} = lists:partition(fun(N) -> N < CommittedSegno end, Segnos0),
-  case Segnos =/= [] andalso is_all_consumed(Dir, CommittedSegno, CommittedId) of
+  case Segnos =/= [] andalso
+       hd(Segnos) =:= CommittedSegno andalso
+       is_all_consumed(Dir, CommittedSegno, CommittedId) of
     true ->
       CommittedSegno = hd(Segnos), %% assert
       %% all items in the oldest segment have been consumed,
