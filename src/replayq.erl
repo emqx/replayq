@@ -154,7 +154,11 @@ pop(Q, Opts) ->
 %% @doc peek the queue front item.
 -spec peek(q()) -> empty | {value, item()}.
 peek(#{in_mem := HeadItems}) ->
-  queue:peek(HeadItems).
+  case queue:peek(HeadItems) of
+    empty -> empty;
+    {value, {_Id, Item}} -> Item;
+    {value, Item} -> Item
+  end.
 
 %% @doc Asynch-ly write the consumed item Segment number + ID to a file.
 -spec ack(q(), ack_ref()) -> ok.
