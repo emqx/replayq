@@ -196,7 +196,8 @@ read_next_seg(#{config := #{dir := Dir}, head_segno := HeadSegno} = Q) ->
      head_items := queue:from_list(read_items(Dir, HeadSegno + 1, ?NO_COMMIT_HIST))
     }.
 
-delete_consumed_and_list_rest(Dir) ->
+delete_consumed_and_list_rest(Dir0) ->
+  Dir = unicode:characters_to_list(Dir0),
   Segnos0 = lists:sort([parse_segno(N) || N <- filelib:wildcard("*."?SUFFIX, Dir)]),
   {SegnosToDelete, Segnos} = find_segnos_to_delete(Dir, Segnos0, get_commit_hist(Dir)),
   ok = lists:foreach(fun(Segno) -> ensure_deleted(filename(Dir, Segno)) end, SegnosToDelete),
