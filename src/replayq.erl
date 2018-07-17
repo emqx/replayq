@@ -285,10 +285,9 @@ spawn_committer(HeadSegno, Dir) ->
   Name = iolist_to_binary(filename:join([Dir, committer])),
   %% register a name to avoid having two committers spawned for the same dir
   RegName = binary_to_atom(Name, utf8),
-  erlang:spawn_link(fun() ->
-                        true = erlang:register(RegName, self()),
-                        committer_loop(HeadSegno, Dir)
-                    end).
+  Pid = erlang:spawn_link(fun() -> committer_loop(HeadSegno, Dir) end),
+  true = erlang:register(RegName, Pid),
+  Pid.
 
 committer_loop(HeadSegno, Dir) ->
   receive
@@ -304,7 +303,9 @@ committer_loop(HeadSegno, Dir) ->
       end,
       ?MODULE:committer_loop(Segno, Dir);
     ?STOP ->
-      ok
+      ok;
+    Msg ->
+      exit({replayq_committer_unkown_msg, Msg})
   after
     200 ->
       ?MODULE:committer_loop(HeadSegno, Dir)

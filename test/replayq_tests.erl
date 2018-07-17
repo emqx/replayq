@@ -145,6 +145,18 @@ test_corrupted_segment(BadBytes) ->
   ok = replayq:close(Q4),
   ok = cleanup(Dir).
 
+comitter_crash_test() ->
+  Dir = ?DIR,
+  ComitterName = binary_to_atom(iolist_to_binary(filename:join([Dir, committer])), utf8),
+  Config = #{dir => Dir, seg_bytes => 1000},
+  Q = replayq:open(Config),
+  erlang:process_flag(trap_exit, true),
+  ComitterName ! <<"foo">>,
+  receive
+    {'EXIT', _Pid, {replayq_committer_unkown_msg, <<"foo">>}} ->
+      ok
+  end.
+
 %% helpers ===========================================================
 
 cleanup(Dir) ->
