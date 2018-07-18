@@ -52,7 +52,7 @@
 -define(STOP, stop).
 
 -spec open(config()) -> q().
-open(#{mem_only := true} = Config) ->
+open(#{mem_only := true}) ->
   #{config => mem_only,
     stats => #{bytes => 0, count => 0},
     in_mem => queue:new()
