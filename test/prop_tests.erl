@@ -4,7 +4,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 run_test_() ->
-  Opts = [{numtests, 500}, {to_file, user}],
+  Opts = [{numtests, 1000}, {to_file, user}],
   {timeout, 60,
    fun() -> ?assert(proper:quickcheck(prop_run(), Opts)) end}.
 
@@ -25,10 +25,11 @@ prop_run() ->
             end
           end).
 
-apply_ops(_MQ, _DQ, [], _) -> ok;
+apply_ops(MQ, DQ, [], _) ->
+  ok = compare(MQ, DQ);
 apply_ops(MQ0, DQ0, [Op | Rest], Cfg) ->
   {MQ, DQ} = apply_op(MQ0, DQ0, Op, Cfg),
-  ok = compare(MQ, DQ),
+  ok = compare_stats(MQ, DQ),
   apply_ops(MQ, DQ, Rest, Cfg).
 
 apply_op(MQ0, DQ0, {append, Items}, _Cfg)->
@@ -69,6 +70,11 @@ delete_dir(Dir) ->
   lists:foreach(fun(F) -> ok = file:delete(filename:join([Dir, F])) end,
                 filelib:wildcard("*", Dir)),
   ok = file:del_dir(Dir).
+
+compare_stats(MQ, DQ) ->
+  ?assertEqual(replayq:count(MQ), replayq:count(DQ)),
+  ?assertEqual(replayq:bytes(MQ), replayq:bytes(DQ)),
+  ok.
 
 compare(Q1, Q2) ->
   {NewQ1, _, Items1} = replayq:pop(Q1, #{}),
