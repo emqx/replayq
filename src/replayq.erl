@@ -1,7 +1,7 @@
 -module(replayq).
 
 -export([open/1, close/1]).
--export([append/2, pop/2, ack/2, peek/1]).
+-export([append/2, pop/2, ack/2, ack_sync/2, peek/1]).
 -export([count/1, bytes/1, is_empty/1]).
 
 -export([committer_loop/2]).
@@ -45,7 +45,7 @@
 -define(SUFFIX, "replaylog").
 -define(DEFAULT_POP_BYTES_LIMIT, 2000000).
 -define(DEFAULT_POP_COUNT_LIMIT, 1000).
--define(COMMIT(SEGNO, ID), {commit, SEGNO, ID}).
+-define(COMMIT(SEGNO, ID, From), {commit, SEGNO, ID, From}).
 -define(NO_COMMIT_HIST, no_commit_hist).
 -define(FIRST_SEGNO, 1).
 -define(NEXT_SEGNO(N), (N + 1)).
@@ -82,7 +82,7 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
        }
   end.
 
--spec close(q() | w_cur()) -> ok.
+-spec close(q() | w_cur()) -> ok | {error, any()}.
 close(#{config := mem_only}) -> ok;
 close(#{w_cur := W_Cur, committer := Pid}) ->
   MRef = erlang:monitor(process, Pid),
@@ -94,9 +94,10 @@ close(#{w_cur := W_Cur, committer := Pid}) ->
   end,
   close(W_Cur);
 close(#{fd := Fd}) ->
-  ok = file:close(Fd).
+  file:close(Fd).
 
 -spec append(q(), [item()]) -> q().
+append(Q, []) -> Q;
 append(#{config := mem_only,
          in_mem := InMem,
          stats := #{bytes := Bytes0, count := Count0}
@@ -164,8 +165,16 @@ peek(#{in_mem := HeadItems}) ->
 -spec ack(q(), ack_ref()) -> ok.
 ack(_, ?NOTHING_TO_ACK) -> ok;
 ack(#{committer := Pid}, {Segno, Id}) ->
-  Pid ! ?COMMIT(Segno, Id),
+  Pid ! ?COMMIT(Segno, Id, false),
   ok.
+
+%% @hidden Synced ack, for deterministic tests only
+-spec ack_sync(q(), ack_ref()) -> ok.
+ack_sync(_, ?NOTHING_TO_ACK) -> ok;
+ack_sync(#{committer := Pid}, {Segno, Id}) ->
+  Ref = make_ref(),
+  Pid ! ?COMMIT(Segno, Id, {self(), Ref}),
+  receive {Ref, ok} -> ok end.
 
 count(#{stats := #{count := Count}}) -> Count.
 
@@ -233,9 +242,18 @@ pop2(#{head_segno := HeadSegno,
       pop(NewQ, Bytes - size(Item), Count - 1, NewAckRef, [Item | Acc])
   end.
 
-read_next_seg(#{config := #{dir := Dir}, head_segno := HeadSegno} = Q) ->
-  Q#{head_segno := HeadSegno + 1,
-     in_mem := queue:from_list(read_items(Dir, HeadSegno + 1, ?NO_COMMIT_HIST))
+read_next_seg(#{config := #{dir := Dir},
+                head_segno := HeadSegno,
+                w_cur := #{segno := TailSegno, fd := Fd}
+               } = Q) ->
+  NextSegno = HeadSegno + 1,
+  case NextSegno =:= TailSegno of
+    true -> ok = file:sync(Fd);
+    false -> ok
+  end,
+  NextSegItems = read_items(Dir, NextSegno, ?NO_COMMIT_HIST),
+  Q#{head_segno := NextSegno,
+     in_mem := queue:from_list(NextSegItems)
     }.
 
 delete_consumed_and_list_rest(Dir0) ->
@@ -291,7 +309,7 @@ spawn_committer(HeadSegno, Dir) ->
 
 committer_loop(HeadSegno, Dir) ->
   receive
-    ?COMMIT(Segno, Id) ->
+    ?COMMIT(Segno, Id, From) ->
       IoData = io_lib:format("~p.\n", [#{segno => Segno, id => Id}]),
       ok = file:write_file(commit_filename(Dir), IoData),
       case Segno > HeadSegno of
@@ -300,6 +318,10 @@ committer_loop(HeadSegno, Dir) ->
           lists:foreach(fun(N) -> ok = ensure_deleted(filename(Dir, N)) end, SegnosToDelete);
         false ->
           ok
+      end,
+      case From of
+        {Pid, Ref} -> Pid ! {Ref, ok};
+        _ -> ok
       end,
       ?MODULE:committer_loop(Segno, Dir);
     ?STOP ->

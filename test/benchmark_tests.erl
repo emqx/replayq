@@ -5,15 +5,16 @@
 -define(DIR, filename:join([data_dir(), ?FUNCTION_NAME, integer_to_list(uniq())])).
 -define(WRITE_CHUNK_SIZE, 10).
 -define(ITEM_BYTES, 2 bsl 10).
+-define(RUN_SECS, 2). %% change to 10 or even more for real test
 
 run_test_() ->
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 100 bsl 20},
-  {timeout, 60,
+  {timeout, ?RUN_SECS * 2,
    fun() ->
        Writter = erlang:spawn_link(fun() -> writter(Config) end),
        Now = erlang:system_time(),
-       timer:sleep(timer:seconds(10)),
+       timer:sleep(timer:seconds(?RUN_SECS)),
        _ = erlang:send(Writter, {stop, self()}),
        Result = wait_for_result(Now),
        print_result(Result)
