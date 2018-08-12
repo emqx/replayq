@@ -153,7 +153,7 @@ pop(Q, Opts) ->
   pop(Q, Bytes, Count, ?NOTHING_TO_ACK, []).
 
 %% @doc peek the queue front item.
--spec peek(q()) -> empty | {value, item()}.
+-spec peek(q()) -> empty | item().
 peek(#{in_mem := HeadItems}) ->
   case queue:peek(HeadItems) of
     empty -> empty;
@@ -176,8 +176,10 @@ ack_sync(#{committer := Pid}, {Segno, Id}) ->
   Pid ! ?COMMIT(Segno, Id, {self(), Ref}),
   receive {Ref, ok} -> ok end.
 
+-spec count(q()) -> count().
 count(#{stats := #{count := Count}}) -> Count.
 
+-spec bytes(q()) -> bytes().
 bytes(#{stats := #{bytes := Bytes}}) -> Bytes.
 
 is_empty(#{config := mem_only, in_mem := All}) ->
