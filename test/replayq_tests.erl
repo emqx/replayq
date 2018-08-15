@@ -30,9 +30,23 @@ reopen_test() ->
   ?assertEqual(10, replayq:bytes(Q2)),
   ok = cleanup(Dir).
 
-append_pop_disk_test() ->
+append_pop_disk_default_marshaller_test() ->
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 1},
+  test_append_pop_disk(Config).
+
+append_pop_disk_my_marshaller_test() ->
+  Dir = ?DIR,
+  Config = #{dir => Dir,
+             seg_bytes => 1,
+             sizer => fun(Item) -> size(Item) end,
+             marshaller => fun(<<"mmp", I/binary>>) -> I;
+                              (I) -> <<"mmp", I/binary>>
+                           end
+            },
+  test_append_pop_disk(Config).
+
+test_append_pop_disk(#{dir := Dir} = Config) ->
   Q0 = replayq:open(Config),
   Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
   Q2 = replayq:append(Q1, [<<"item3">>]),
@@ -58,21 +72,33 @@ append_pop_disk_test() ->
   ok = replayq:close(Q6),
   ok = cleanup(Dir).
 
-append_pop_mem_test() ->
+append_pop_mem_default_marshaller_test_test() ->
   Config = #{mem_only => true},
+  test_append_pop_mem(Config).
+
+append_pop_mem_my_marshaller_test_test() ->
+  Config = #{mem_only => true,
+             sizer => fun(Item) -> size(Item) end,
+             marshaller => fun(<<"mmp", I/binary>>) -> I;
+                              (I) -> <<"mmp", I/binary>>
+                           end
+            },
+  test_append_pop_mem(Config).
+
+test_append_pop_mem(Config) ->
   Q0 = replayq:open(Config),
   Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
   Q2 = replayq:append(Q1, [<<"item3">>]),
   ?assertEqual(<<"item1">>, replayq:peek(Q2)),
-  {Q3, AckRef, Items} = replayq:pop(Q2, #{count_limit => 5,
-                                          bytes_limit => 1000}),
+  {Q3, _AckRef, Items} = replayq:pop(Q2, #{count_limit => 5,
+                                           bytes_limit => 1000}),
   ?assertEqual([<<"item1">>, <<"item2">>, <<"item3">>], Items),
   %% stop without acking
   ok = replayq:close(Q3),
   %% open again expect to receive the same items
   Q4 = replayq:open(Config),
-  {Q5, AckRef1, Items1} = replayq:pop(Q4, #{count_limit => 5,
-                                            bytes_limit => 1000}),
+  {Q5, _AckRef1, _Items1} =
+    replayq:pop(Q4, #{count_limit => 5, bytes_limit => 1000}),
   ?assertEqual(empty, replayq:peek(Q5)),
   ?assertEqual({Q5, nothing_to_ack, []}, replayq:pop(Q5, #{})),
   ok = replayq:ack(Q5, nothing_to_ack),
@@ -149,7 +175,7 @@ comitter_crash_test() ->
   Dir = ?DIR,
   ComitterName = binary_to_atom(iolist_to_binary(filename:join([Dir, committer])), utf8),
   Config = #{dir => Dir, seg_bytes => 1000},
-  Q = replayq:open(Config),
+  _ = replayq:open(Config),
   erlang:process_flag(trap_exit, true),
   ComitterName ! <<"foo">>,
   receive

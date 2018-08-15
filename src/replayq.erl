@@ -6,17 +6,20 @@
 
 -export([committer_loop/2]).
 
--export_type([config/0, q/0, ack_ref/0]).
+-export_type([config/0, q/0, ack_ref/0, sizer/0, marshaller/0]).
 
 -define(NOTHING_TO_ACK, nothing_to_ack).
 
 -type segno() :: pos_integer().
--type item() :: binary().
+-type item() :: term().
 -type count() :: non_neg_integer().
+-type id() :: count().
 -type bytes() :: non_neg_integer().
 -type filename() :: file:filename_all().
 -type dir() :: filename().
 -type ack_ref() :: ?NOTHING_TO_ACK | {segno(), ID :: pos_integer()}.
+-type sizer() :: fun((item()) -> bytes()).
+-type marshaller() :: fun((item()) -> binary()).
 
 -type config() :: #{dir => dir(),
                     seg_bytes => bytes(),
@@ -35,10 +38,12 @@
 
 -opaque q() :: #{config := config(),
                  stats := stats(),
-                 in_mem := queue:queue(item()),
+                 in_mem := queue:queue(in_mem_item()),
                  w_cur => w_cur(),
                  committer =>  pid(),
-                 head_segno => segno()
+                 head_segno => segno(),
+                 sizer := sizer(),
+                 marshaller => marshaller()
                 }.
 
 -define(LAYOUT_VSN, 0).
@@ -50,37 +55,50 @@
 -define(FIRST_SEGNO, 1).
 -define(NEXT_SEGNO(N), (N + 1)).
 -define(STOP, stop).
+-define(DEFAULT_SIZER, fun(I) when is_binary(I) -> erlang:size(I) end).
+-define(DEFAULT_MARSHALLER, fun(I) when is_binary(I) -> I end).
+-define(MEM_ONLY_ITEM(Bytes, Item), {Bytes, Item}).
+-define(DISK_CP_ITEM(Id, Bytes, Item), {Id, Bytes, Item}).
+
+-type in_mem_item() :: ?MEM_ONLY_ITEM(bytes(), item())
+                     | ?DISK_CP_ITEM(id(), bytes(), item()).
 
 -spec open(config()) -> q().
-open(#{mem_only := true}) ->
-  #{config => mem_only,
-    stats => #{bytes => 0, count => 0},
-    in_mem => queue:new()
+open(#{mem_only := true} = C) ->
+  #{stats => #{bytes => 0, count => 0},
+    in_mem => queue:new(),
+    sizer => get_sizer(C),
+    config => mem_only
    };
 open(#{dir := Dir, seg_bytes := _} = Config) ->
   ok = filelib:ensure_dir(filename:join(Dir, "foo")),
-  case delete_consumed_and_list_rest(Dir) of
-    [] ->
-      %% no old segments
-      #{config => Config,
-        stats => #{bytes => 0, count => 0},
-        w_cur => open_segment(Dir, ?FIRST_SEGNO),
-        committer => spawn_committer(?FIRST_SEGNO, Dir),
-        head_segno => ?FIRST_SEGNO,
-        in_mem => queue:new()
-       };
-    Segs ->
-      LastSegno = lists:last(Segs),
-      CommitHist = get_commit_hist(Dir),
-      HeadItems = read_items(Dir, hd(Segs), CommitHist),
-      #{config => Config,
-        stats => collect_stats(Dir, HeadItems, tl(Segs)),
-        w_cur => maybe_roll_out_to_new_seg(Dir, LastSegno),
-        committer => spawn_committer(hd(Segs), Dir),
-        head_segno => hd(Segs),
-        in_mem => queue:from_list(HeadItems)
-       }
-  end.
+  Sizer = get_sizer(Config),
+  Marshaller = get_marshaller(Config),
+  Q = case delete_consumed_and_list_rest(Dir) of
+        [] ->
+          %% no old segments
+          #{stats => #{bytes => 0, count => 0},
+            w_cur => open_segment(Dir, ?FIRST_SEGNO),
+            committer => spawn_committer(?FIRST_SEGNO, Dir),
+            head_segno => ?FIRST_SEGNO,
+            in_mem => queue:new()
+           };
+        Segs ->
+          LastSegno = lists:last(Segs),
+          CommitHist = get_commit_hist(Dir),
+          Reader = fun(Seg, Ch) -> read_items(Dir, Seg, Ch, Sizer, Marshaller) end,
+          HeadItems = Reader(hd(Segs), CommitHist),
+          #{stats => collect_stats(HeadItems, tl(Segs), Reader),
+            w_cur => maybe_roll_out_to_new_seg(Dir, LastSegno),
+            committer => spawn_committer(hd(Segs), Dir),
+            head_segno => hd(Segs),
+            in_mem => queue:from_list(HeadItems)
+           }
+      end,
+  Q#{sizer => Sizer,
+     marshaller => Marshaller,
+     config => maps:without([sizer, marshaller], Config)
+    }.
 
 -spec close(q() | w_cur()) -> ok | {error, any()}.
 close(#{config := mem_only}) -> ok;
@@ -100,24 +118,24 @@ close(#{fd := Fd}) ->
 append(Q, []) -> Q;
 append(#{config := mem_only,
          in_mem := InMem,
-         stats := #{bytes := Bytes0, count := Count0}
-        } = Q, Items) ->
-  Count1 = erlang:length(Items),
-  Bytes1 = erlang:iolist_size(Items),
+         stats := #{bytes := Bytes0, count := Count0},
+         sizer := Sizer
+        } = Q, Items0) ->
+  {Count1, Bytes1, Items} = transform(false, Items0, Sizer),
   Stats = #{count => Count0 + Count1, bytes => Bytes0 + Bytes1},
   Q#{stats := Stats,
-     in_mem := queue:join(InMem, queue:from_list(Items))
+     in_mem := append_in_mem(Items, InMem)
     };
 append(#{config := #{seg_bytes := BytesLimit, dir := Dir},
          stats := #{bytes := Bytes0, count := Count0},
          w_cur := #{segno := WriterSegno, count := CountInSeg} = W_Cur0,
          head_segno := HeadSegno,
-         in_mem := HeadItems0
+         in_mem := HeadItems0,
+         sizer := Sizer,
+         marshaller := Marshaller
         } = Q, Items0) ->
-  Items = assign_id(CountInSeg + 1, Items0),
-  IoData = lists:map(fun make_iodata/1, Items),
-  Count1 = erlang:length(Items),
-  Bytes1 = erlang:iolist_size(Items0),
+  IoData = lists:map(fun(I) -> make_iodata(I, Marshaller) end, Items0),
+  {Count1, Bytes1, Items} = transform(CountInSeg + 1, Items0, Sizer),
   Stats = #{count => Count0 + Count1, bytes => Bytes0 + Bytes1},
   W_Cur =
     case do_append(W_Cur0, Count1, Bytes1, IoData) of
@@ -134,7 +152,7 @@ append(#{config := #{seg_bytes := BytesLimit, dir := Dir},
     end,
   HeadItems =
     case HeadSegno =:= WriterSegno of
-      true -> queue:join(HeadItems0, queue:from_list(Items));
+      true -> append_in_mem(Items, HeadItems0);
       false -> HeadItems0
     end,
   Q#{stats := Stats,
@@ -157,8 +175,8 @@ pop(Q, Opts) ->
 peek(#{in_mem := HeadItems}) ->
   case queue:peek(HeadItems) of
     empty -> empty;
-    {value, {_Id, Item}} -> Item;
-    {value, Item} -> Item
+    {value, ?MEM_ONLY_ITEM(_, Item)} -> Item;
+    {value, ?DISK_CP_ITEM(_, _, Item)} -> Item
   end.
 
 %% @doc Asynch-ly write the consumed item Segment number + ID to a file.
@@ -193,6 +211,23 @@ is_empty(#{w_cur := #{segno := TailSegno},
 
 %% internals =========================================================
 
+transform(Id, Items, Sizer) ->
+  transform(Id, Items, Sizer, 0, 0, []).
+
+transform(_Id, [], _Sizer, Count, Bytes, Acc) ->
+  {Count, Bytes, lists:reverse(Acc)};
+transform(Id, [Item0 | Rest], Sizer, Count, Bytes, Acc) ->
+  Size = Sizer(Item0),
+  {NextId, Item} =
+    case Id of
+      false -> {false, ?MEM_ONLY_ITEM(Size, Item0)};
+      N -> {N + 1, ?DISK_CP_ITEM(Id, Size, Item0)}
+    end,
+  transform(NextId, Rest, Sizer, Count + 1, Bytes + Size, [Item | Acc]).
+
+append_in_mem([], Q) -> Q;
+append_in_mem([Item | Rest], Q) -> append_in_mem(Rest, queue:in(Item, Q)).
+
 pop(Q, _Bytes, 0, AckRef, Acc) ->
   {Q, AckRef, lists:reverse(Acc)};
 pop(#{config := Cfg} = Q, Bytes, Count, AckRef, Acc) ->
@@ -209,15 +244,15 @@ pop_mem(#{in_mem := InMem,
           stats := #{count := TotalCount, bytes := TotalBytes} = Stats
          } = Q, Bytes, Count, Acc) ->
   case queue:out(InMem) of
-    {{value, Item}, _} when size(Item) > Bytes andalso Acc =/= [] ->
+    {{value, ?MEM_ONLY_ITEM(Sz, _Item)}, _} when Sz > Bytes andalso Acc =/= [] ->
       {Q, ?NOTHING_TO_ACK, lists:reverse(Acc)};
-    {{value, Item}, Rest} ->
+    {{value, ?MEM_ONLY_ITEM(Sz, Item)}, Rest} ->
       NewQ = Q#{in_mem := Rest,
                 stats := Stats#{count := TotalCount - 1,
-                                bytes := TotalBytes - size(Item)
+                                bytes := TotalBytes - Sz
                                }
                },
-      pop(NewQ, Bytes - size(Item), Count - 1, ?NOTHING_TO_ACK, [Item | Acc])
+      pop(NewQ, Bytes - Sz, Count - 1, ?NOTHING_TO_ACK, [Item | Acc])
   end.
 
 pop2(#{head_segno := HeadSegno,
@@ -226,34 +261,36 @@ pop2(#{head_segno := HeadSegno,
        w_cur := #{segno := WriterSegno}
       } = Q, Bytes, Count, AckRef, Acc) ->
   case queue:out(HeadItems) of
-    {{value, {_Id, Item}}, _} when size(Item) > Bytes andalso Acc =/= [] ->
+    {{value, ?DISK_CP_ITEM(_, Sz, _Item)}, _} when Sz > Bytes andalso Acc =/= [] ->
       %% taking the head item would cause exceeding size limit
       {Q, AckRef, lists:reverse(Acc)};
-    {{value, {Id, Item}}, HeadItemsX} ->
-      Q1 = Q#{in_mem := HeadItemsX,
+    {{value, ?DISK_CP_ITEM(Id, Sz, Item)}, Rest} ->
+      Q1 = Q#{in_mem := Rest,
               stats := Stats#{count := TotalCount - 1,
-                              bytes := TotalBytes - size(Item)
+                              bytes := TotalBytes - Sz
                              }
              },
       %% read the next segment in case current is drained
-      NewQ = case queue:is_empty(HeadItemsX) andalso HeadSegno < WriterSegno of
+      NewQ = case queue:is_empty(Rest) andalso HeadSegno < WriterSegno of
                true -> read_next_seg(Q1);
                false -> Q1
              end,
       NewAckRef = {HeadSegno, Id},
-      pop(NewQ, Bytes - size(Item), Count - 1, NewAckRef, [Item | Acc])
+      pop(NewQ, Bytes - Sz, Count - 1, NewAckRef, [Item | Acc])
   end.
 
 read_next_seg(#{config := #{dir := Dir},
                 head_segno := HeadSegno,
-                w_cur := #{segno := TailSegno, fd := Fd}
+                w_cur := #{segno := TailSegno, fd := Fd},
+                sizer := Sizer,
+                marshaller := Marshaller
                } = Q) ->
   NextSegno = HeadSegno + 1,
   case NextSegno =:= TailSegno of
     true -> ok = file:sync(Fd);
     false -> ok
   end,
-  NextSegItems = read_items(Dir, NextSegno, ?NO_COMMIT_HIST),
+  NextSegItems = read_items(Dir, NextSegno, ?NO_COMMIT_HIST, Sizer, Marshaller),
   Q#{head_segno := NextSegno,
      in_mem := queue:from_list(NextSegItems)
     }.
@@ -348,11 +385,6 @@ get_commit_hist(Dir) ->
 commit_filename(Dir) ->
   filename:join([Dir, "COMMIT"]).
 
-%% Assign a per-segment sequence number (1-based) for each item within a segment
-%% This ID is (together with segment number) used to acknowledge consumed items.
-assign_id(_Id, []) -> [];
-assign_id(Id, [Item | Rest]) -> [{Id, Item} | assign_id(Id + 1, Rest)].
-
 do_append(#{fd := Fd, bytes := Bytes0, count := Count0} = Cur,
           Count, Bytes, IoData) ->
   ok = file:write(Fd, IoData),
@@ -360,13 +392,26 @@ do_append(#{fd := Fd, bytes := Bytes0, count := Count0} = Cur,
        count => Count0 + Count
       }.
 
-read_items(Dir, Segno, CommitHist) ->
-  Items = do_read_items(Dir, Segno),
-  case CommitHist of
-    ?NO_COMMIT_HIST -> Items;
-    {Segno, CommittedId} -> [{I, Item} || {I, Item} <- Items, I > CommittedId];
-    {CommitedSegno, _} when CommitedSegno < Segno -> Items
-  end.
+read_items(Dir, Segno, CommitHist, Sizer, Marshaller) ->
+  Items0 = do_read_items(Dir, Segno),
+  Items =
+    case CommitHist of
+      ?NO_COMMIT_HIST ->
+        %% no commit hist, return all
+        Items0;
+      {CommitedSegno, _} when CommitedSegno < Segno ->
+        %% committed at an older segment
+        Items0;
+      {Segno, CommittedId} ->
+        %% committed at current segment keep only the tail
+        {_, R} = lists:splitwith(fun({I, _}) -> I =< CommittedId end, Items0),
+        R
+    end,
+  lists:map(fun({Id, Bin}) ->
+                Item = Marshaller(Bin),
+                Size = Sizer(Item),
+                ?DISK_CP_ITEM(Id, Size, Item)
+            end, Items).
 
 do_read_items(Dir, Segno) ->
   Filename = filename(Dir, Segno),
@@ -390,17 +435,20 @@ parse_items(<<?LAYOUT_VSN:8, CRC:32/unsigned-integer, Size:32/unsigned-integer,
 parse_items(Corrupted, _Id, Acc) ->
   {lists:reverse(Acc), Corrupted}.
 
-make_iodata({_Id, Item}) when is_binary(Item) ->
+make_iodata(Item0, Marshaller) ->
+  Item = Marshaller(Item0),
   Size = size(Item),
   CRC = erlang:crc32(Item),
   [<<?LAYOUT_VSN:8, CRC:32/unsigned-integer, Size:32/unsigned-integer>>, Item].
 
-collect_stats(Dir, HeadItems, SegsOnDisk) ->
-  ItemF = fun({_, Item}, {B, C}) -> {B + size(Item), C + 1} end,
+collect_stats(HeadItems, SegsOnDisk, Reader) ->
+  ItemF = fun(?DISK_CP_ITEM(_Id, Sz, _Item), {B, C}) ->
+              {B + Sz, C + 1}
+          end,
   Acc0 = lists:foldl(ItemF, {0, 0}, HeadItems),
   {Bytes, Count} =
     lists:foldl(fun(Segno, Acc) ->
-                    Items = read_items(Dir, Segno, ?NO_COMMIT_HIST),
+                    Items = Reader(Segno, ?NO_COMMIT_HIST),
                     lists:foldl(ItemF, Acc, Items)
                 end, Acc0, SegsOnDisk),
   #{bytes => Bytes, count => Count}.
@@ -429,4 +477,10 @@ open_segment(Dir, Segno) ->
   %% raw so there is no need to go through the single gen_server file_server
   {ok, Fd} = file:open(Filename, [raw, read, write, binary, delayed_write]),
   #{fd => Fd, segno => Segno, bytes => 0, count => 0}.
+
+get_sizer(C) ->
+  maps:get(sizer, C, ?DEFAULT_SIZER).
+
+get_marshaller(C) ->
+  maps:get(marshaller, C, ?DEFAULT_MARSHALLER).
 

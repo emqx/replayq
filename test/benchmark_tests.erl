@@ -3,9 +3,9 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DIR, filename:join([data_dir(), ?FUNCTION_NAME, integer_to_list(uniq())])).
--define(WRITE_CHUNK_SIZE, 10).
--define(ITEM_BYTES, 2 bsl 10).
--define(RUN_SECS, 2). %% change to 10 or even more for real test
+-define(WRITE_CHUNK_SIZE, 1).
+-define(ITEM_BYTES, 256).
+-define(RUN_SECS, 10). %% change to 10 or even more for real test
 
 run_test_() ->
   Dir = ?DIR,
@@ -29,8 +29,9 @@ wait_for_result(Then) ->
   end.
 
 print_result(#{count := Count, bytes := Bytes, time := Seconds}) ->
-  io:format(user, "~p messages per second\n~p bytes per second",
-            [Count / Seconds, Bytes / Seconds]).
+  io:format(user, "=============\n~p messages per second\n"
+                  "~p bytes per second==================\n",
+                  [Count / Seconds, Bytes / Seconds]).
 
 writter(Config) ->
   Q = replayq:open(Config),
