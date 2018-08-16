@@ -32,13 +32,13 @@ ok = replayq:ack(Q2, AckRef).
 
 ```
 Q0 = replayq:open(#{dir => "/tmp/replayq-test",
-                    seg_bytes => 10000000
+                    seg_bytes => 10000000,
                     sizer => fun({K, V}) -> size(K) + size(V) end,
                     marshaller => fun({K, V}) -> term_to_binary({K, V});
                                      (Bin)    -> binary_to_term(Bin)
                                   end
                    }),
-Q1 = replayq:append(Q0, [{k1, v1}, {k2, v2}]),
-{Q2, AckRef, [{k1, v1}]} = replayq:pop(Q1, #{count_limit => 1}),
+Q1 = replayq:append(Q0, [{<<"k1">>, <<"v1">>}, {<<"k2">>, <<"v2">>}]),
+{Q2, AckRef, [{<<"k1">>, <<"v1">>}]} = replayq:pop(Q1, #{count_limit => 1}),
 ok = replayq:ack(Q2, AckRef).
 ```
