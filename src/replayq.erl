@@ -350,7 +350,7 @@ committer_loop(HeadSegno, Dir) ->
   receive
     ?COMMIT(Segno, Id, From) ->
       IoData = io_lib:format("~p.\n", [#{segno => Segno, id => Id}]),
-      ok = file:write_file(commit_filename(Dir), IoData),
+      ok = do_commit(Dir, IoData),
       case Segno > HeadSegno of
         true ->
           SegnosToDelete = lists:seq(HeadSegno, Segno - 1),
@@ -382,8 +382,17 @@ get_commit_hist(Dir) ->
       ?NO_COMMIT_HIST
   end.
 
+do_commit(Dir, IoData) ->
+  TmpName = commit_filename(Dir, "COMMIT.tmp"),
+  Name = commit_filename(Dir),
+  ok = file:write_file(TmpName, IoData),
+  ok = file:rename(TmpName, Name).
+
 commit_filename(Dir) ->
-  filename:join([Dir, "COMMIT"]).
+  commit_filename(Dir, "COMMIT").
+
+commit_filename(Dir, Name) ->
+  filename:join([Dir, Name]).
 
 do_append(#{fd := Fd, bytes := Bytes0, count := Count0} = Cur,
           Count, Bytes, IoData) ->

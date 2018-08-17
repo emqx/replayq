@@ -1,6 +1,6 @@
 {application, replayq,
  [{description, "A Disk Queue for Log Replay in Erlang"},
-  {vsn, "0.1.0"},
+  {vsn, "0.1.1"},
   {registered, []},
   {applications,
    [kernel,
