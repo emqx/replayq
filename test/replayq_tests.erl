@@ -122,7 +122,6 @@ append_limit_mem_test() ->
 
 append_limit_disk_test() ->
   Dir = ?DIR,
-  %% Dir = filename:join(["test", "1"]),
   Config = #{dir => Dir,
              seg_bytes => 1,
              sizer => fun(Item) -> size(Item) end,
