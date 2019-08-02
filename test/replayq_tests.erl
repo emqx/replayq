@@ -105,7 +105,7 @@ test_append_pop_mem(Config) ->
   ok = replayq:ack(Q5, nothing_to_ack),
   ok = replayq:close(Q5).
 
-append_limit_mem_test() ->
+append_limit_size_mem_test() ->
   Config = #{mem_only => true,
              sizer => fun(Item) -> size(Item) end,
              marshaller => fun(<<"mmp", I/binary>>) -> I;
@@ -113,14 +113,10 @@ append_limit_mem_test() ->
                            end,
              limit_size => 10
             },
-  Q0 = replayq:open(Config),
-  Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>, <<"item3">>, <<"item4">>]),
-  {Q2, _AckRef, Items} = replayq:pop(Q1, #{count_limit => 1}),
-  ?assertEqual([<<"item3">>], Items),
-  replayq:close(Q2),
+  test_append_limit_size(Config),
   ok.
 
-append_limit_disk_test() ->
+append_limit_size_disk_test() ->
   Dir = ?DIR,
   Config = #{dir => Dir,
              seg_bytes => 1,
@@ -130,12 +126,15 @@ append_limit_disk_test() ->
                            end,
              limit_size => 10
             },
+  test_append_limit_size(Config),
+  ok = cleanup(Dir).
+
+test_append_limit_size(Config) ->
   Q0 = replayq:open(Config),
   Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>, <<"item3">>, <<"item4">>]),
   {Q2, _AckRef, Items} = replayq:pop(Q1, #{count_limit => 1}),
   ?assertEqual([<<"item3">>], Items),
-  replayq:close(Q2),
-  ok.
+  ok = replayq:close(Q2).
 
 pop_limit_disk_test() ->
   Dir = ?DIR,
