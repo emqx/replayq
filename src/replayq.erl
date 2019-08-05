@@ -119,16 +119,6 @@ close(#{w_cur := W_Cur, committer := Pid}) ->
 close(#{fd := Fd}) ->
   file:close(Fd).
 
--spec clean(q()) -> q().
-clean(#{max_total_bytes := LimitSize,
-        stats := #{bytes := Bytes}
-       } = Q) when LimitSize < Bytes ->
-      {Q1, AckRef, _Items} =
-        pop(Q, #{bytes_limit => (Bytes - LimitSize)}),
-      ok = ack(Q1, AckRef),
-      Q1;
-clean(Q) ->
-      Q.
 
 -spec append(q(), [item()]) -> q().
 append(Q, []) -> Q;
@@ -226,6 +216,16 @@ is_empty(#{w_cur := #{segno := TailSegno},
   Result = (count(Q) =:= 0). %% assert
 
 %% internals =========================================================
+
+clean(#{max_total_bytes := MaxTotalBytes,
+        stats := #{bytes := Bytes}
+       } = Q) when MaxTotalBytes < Bytes ->
+      {Q1, AckRef, _Items} =
+        pop(Q, #{bytes_limit => (Bytes - MaxTotalBytes)}),
+      ok = ack(Q1, AckRef),
+      Q1;
+clean(Q) ->
+      Q.
 
 transform(Id, Items, Sizer) ->
   transform(Id, Items, Sizer, 0, 0, []).
