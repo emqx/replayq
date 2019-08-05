@@ -23,7 +23,8 @@
 
 -type config() :: #{dir => dir(),
                     seg_bytes => bytes(),
-                    mem_only => boolean()
+                    mem_only => boolean(),
+                    max_total_bytes => bytes()
                    }.
 %% writer cursor
 -type w_cur() :: #{segno := segno(),
@@ -43,13 +44,15 @@
                  committer =>  pid(),
                  head_segno => segno(),
                  sizer := sizer(),
-                 marshaller => marshaller()
+                 marshaller => marshaller(),
+                 max_total_bytes := bytes()
                 }.
 
 -define(LAYOUT_VSN, 0).
 -define(SUFFIX, "replaylog").
 -define(DEFAULT_POP_BYTES_LIMIT, 2000000).
 -define(DEFAULT_POP_COUNT_LIMIT, 1000).
+-define(DEFAULT_REPLAYQ_LIMIT, 2000000000).
 -define(COMMIT(SEGNO, ID, From), {commit, SEGNO, ID, From}).
 -define(NO_COMMIT_HIST, no_commit_hist).
 -define(FIRST_SEGNO, 1).
@@ -68,7 +71,8 @@ open(#{mem_only := true} = C) ->
   #{stats => #{bytes => 0, count => 0},
     in_mem => queue:new(),
     sizer => get_sizer(C),
-    config => mem_only
+    config => mem_only,
+    max_total_bytes => maps:get(max_total_bytes, C, ?DEFAULT_REPLAYQ_LIMIT)
    };
 open(#{dir := Dir, seg_bytes := _} = Config) ->
   ok = filelib:ensure_dir(filename:join(Dir, "foo")),
@@ -97,7 +101,8 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
       end,
   Q#{sizer => Sizer,
      marshaller => Marshaller,
-     config => maps:without([sizer, marshaller], Config)
+     config => maps:without([sizer, marshaller], Config),
+     max_total_bytes => maps:get(max_total_bytes, Config, ?DEFAULT_REPLAYQ_LIMIT)
     }.
 
 -spec close(q() | w_cur()) -> ok | {error, any()}.
@@ -114,6 +119,7 @@ close(#{w_cur := W_Cur, committer := Pid}) ->
 close(#{fd := Fd}) ->
   file:close(Fd).
 
+
 -spec append(q(), [item()]) -> q().
 append(Q, []) -> Q;
 append(#{config := mem_only,
@@ -121,24 +127,25 @@ append(#{config := mem_only,
          stats := #{bytes := Bytes0, count := Count0},
          sizer := Sizer
         } = Q, Items0) ->
-  {Count1, Bytes1, Items} = transform(false, Items0, Sizer),
-  Stats = #{count => Count0 + Count1, bytes => Bytes0 + Bytes1},
-  Q#{stats := Stats,
-     in_mem := append_in_mem(Items, InMem)
-    };
+  {CountDiff, BytesDiff, Items} = transform(false, Items0, Sizer),
+
+  Stats = #{count => Count0 + CountDiff, bytes => Bytes0 + BytesDiff},
+  clean(Q#{stats := Stats,
+           in_mem := append_in_mem(Items, InMem)
+          });
 append(#{config := #{seg_bytes := BytesLimit, dir := Dir},
          stats := #{bytes := Bytes0, count := Count0},
-         w_cur := #{segno := WriterSegno, count := CountInSeg} = W_Cur0,
+         w_cur := #{count := CountInSeg, segno := WriterSegno} = W_Cur0,
          head_segno := HeadSegno,
-         in_mem := HeadItems0,
          sizer := Sizer,
-         marshaller := Marshaller
+         marshaller := Marshaller,
+         in_mem := HeadItems0
         } = Q, Items0) ->
   IoData = lists:map(fun(I) -> make_iodata(I, Marshaller) end, Items0),
-  {Count1, Bytes1, Items} = transform(CountInSeg + 1, Items0, Sizer),
-  Stats = #{count => Count0 + Count1, bytes => Bytes0 + Bytes1},
+  {CountDiff, BytesDiff, Items} = transform(CountInSeg + 1, Items0, Sizer),
+  Stats = #{count => Count0 + CountDiff, bytes => Bytes0 + BytesDiff},
   W_Cur =
-    case do_append(W_Cur0, Count1, Bytes1, IoData) of
+    case do_append(W_Cur0, CountDiff, BytesDiff, IoData) of
       #{segno := Segno, bytes := Bytes} = W_Cur1 when Bytes >= BytesLimit ->
         %% here we check if segment size is greater than segment size limit
         %% after append based on the assumption that the items are usually
@@ -155,10 +162,9 @@ append(#{config := #{seg_bytes := BytesLimit, dir := Dir},
       true -> append_in_mem(Items, HeadItems0);
       false -> HeadItems0
     end,
-  Q#{stats := Stats,
-     w_cur := W_Cur,
-     in_mem := HeadItems
-    }.
+  clean(Q#{stats := Stats,
+           w_cur := W_Cur,
+           in_mem := HeadItems}).
 
 %% @doc pop out at least one item from the queue.
 %% volume limitted by `bytes_limit' and `count_limit'.
@@ -210,6 +216,16 @@ is_empty(#{w_cur := #{segno := TailSegno},
   Result = (count(Q) =:= 0). %% assert
 
 %% internals =========================================================
+
+clean(#{max_total_bytes := MaxTotalBytes,
+        stats := #{bytes := Bytes}
+       } = Q) when MaxTotalBytes < Bytes ->
+      {Q1, AckRef, _Items} =
+        pop(Q, #{bytes_limit => (Bytes - MaxTotalBytes)}),
+      ok = ack(Q1, AckRef),
+      Q1;
+clean(Q) ->
+      Q.
 
 transform(Id, Items, Sizer) ->
   transform(Id, Items, Sizer, 0, 0, []).
