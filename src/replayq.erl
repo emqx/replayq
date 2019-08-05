@@ -24,7 +24,7 @@
 -type config() :: #{dir => dir(),
                     seg_bytes => bytes(),
                     mem_only => boolean(),
-                    limit_size => bytes()
+                    max_total_bytes => bytes()
                    }.
 %% writer cursor
 -type w_cur() :: #{segno := segno(),
@@ -45,7 +45,7 @@
                  head_segno => segno(),
                  sizer := sizer(),
                  marshaller => marshaller(),
-                 limit_size := bytes()
+                 max_total_bytes := bytes()
                 }.
 
 -define(LAYOUT_VSN, 0).
@@ -72,7 +72,7 @@ open(#{mem_only := true} = C) ->
     in_mem => queue:new(),
     sizer => get_sizer(C),
     config => mem_only,
-    limit_size => maps:get(limit_size, C, ?DEFAULT_REPLAYQ_LIMIT)
+    max_total_bytes => maps:get(max_total_bytes, C, ?DEFAULT_REPLAYQ_LIMIT)
    };
 open(#{dir := Dir, seg_bytes := _} = Config) ->
   ok = filelib:ensure_dir(filename:join(Dir, "foo")),
@@ -102,7 +102,7 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
   Q#{sizer => Sizer,
      marshaller => Marshaller,
      config => maps:without([sizer, marshaller], Config),
-     limit_size => maps:get(limit_size, Config, ?DEFAULT_REPLAYQ_LIMIT)
+     max_total_bytes => maps:get(max_total_bytes, Config, ?DEFAULT_REPLAYQ_LIMIT)
     }.
 
 -spec close(q() | w_cur()) -> ok | {error, any()}.
@@ -120,7 +120,7 @@ close(#{fd := Fd}) ->
   file:close(Fd).
 
 -spec clean(q()) -> q().
-clean(#{limit_size := LimitSize,
+clean(#{max_total_bytes := LimitSize,
         stats := #{bytes := Bytes}
        } = Q) when LimitSize < Bytes ->
       {Q1, AckRef, _Items} =
