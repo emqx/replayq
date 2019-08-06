@@ -7,6 +7,7 @@ A Disk Queue for Log Replay in Erlang
 * Queue items are written to segment files on disk to servive restart.
 * Batch poping items out of queue with size/count limit.
 * An `ack/2` API is provided to record the reader position within a segment.
+* Add config option `max_total_bytes` to limit the total size of replayq logs
 
 ## Usage Example
 
