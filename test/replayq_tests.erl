@@ -30,7 +30,6 @@ reopen_test() ->
   ?assertEqual(10, replayq:bytes(Q2)),
   ok = cleanup(Dir).
 
-
 append_pop_disk_default_marshaller_test() ->
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 1},
@@ -184,13 +183,16 @@ corrupted_segment_test() ->
   %% some random injection
   ok = test_corrupted_segment(<<"foo">>),
   %% a bad CRC
-  ok = test_corrupted_segment(<<0:8, 0:32, 1:32, 1:8>>).
+  ok = test_corrupted_segment(<<0:8, 0:32, 1:32, 1:8>>),
+  %% zero CRC
+  ok = test_corrupted_segment(<<0:8, 0:32, 0:32, "randomtail">>).
+
 
 test_corrupted_segment(BadBytes) ->
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 1000},
   Q0 = replayq:open(Config),
-  Q1 = replayq:append(Q0, [<<"item1">>, <<>>]),
+  Q1 = replayq:append(Q0, [<<"item1">>]),
   #{w_cur := #{fd := Fd}} = Q1, % inspect the opaque internal structure for test
   file:write(Fd, BadBytes), % corrupt the file
   Q2 = replayq:append(Q0, [<<"item3">>]),
@@ -198,7 +200,7 @@ test_corrupted_segment(BadBytes) ->
   Q3 = replayq:open(Config),
   {Q4, _AckRef, Items} = replayq:pop(Q3, #{count_limit => 3}),
   %% do not expect item3 because it was appened to a corrupted tail
-  ?assertEqual([<<"item1">>, <<>>], Items),
+  ?assertEqual([<<"item1">>], Items),
   ?assert(replayq:is_empty(Q4)),
   ok = replayq:close(Q4),
   ok = cleanup(Dir).
