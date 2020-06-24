@@ -48,7 +48,9 @@
                  max_total_bytes := bytes()
                 }.
 
--define(LAYOUT_VSN, 0).
+-define(LAYOUT_VSN_0, 0).
+-define(LAYOUT_VSN_1, 1).
+-define(MAGIC, 841265288).
 -define(SUFFIX, "replaylog").
 -define(DEFAULT_POP_BYTES_LIMIT, 2000000).
 -define(DEFAULT_POP_COUNT_LIMIT, 1000).
@@ -451,7 +453,15 @@ do_read_items(Dir, Segno) ->
   end.
 
 parse_items(<<>>, _Id, Acc) -> {lists:reverse(Acc), <<>>};
-parse_items(<<?LAYOUT_VSN:8, CRC:32/unsigned-integer, Size:32/unsigned-integer,
+parse_items(<<?LAYOUT_VSN_1:8, ?MAGIC:32/unsigned-integer,
+              CRC:32/unsigned-integer, Size:32/unsigned-integer,
+              Item:Size/binary, Rest/binary>> = All, Id, Acc) ->
+  case CRC =:= erlang:crc32(Item) of
+    true -> parse_items(Rest, Id + 1, [{Id, Item} | Acc]);
+    false -> {lists:reverse(Acc), All}
+  end;
+parse_items(<<?LAYOUT_VSN_0:8,
+              CRC:32/unsigned-integer, Size:32/unsigned-integer,
               Item:Size/binary, Rest/binary>> = All, Id, Acc) ->
   case CRC =:= erlang:crc32(Item) andalso Item =/= <<>> of
     true -> parse_items(Rest, Id + 1, [{Id, Item} | Acc]);
@@ -464,10 +474,8 @@ make_iodata(Item0, Marshaller) ->
   Item = Marshaller(Item0),
   Size = size(Item),
   CRC = erlang:crc32(Item),
-  case Size == 0 of
-    true  -> error("can_not_append_empty_bytes");
-    false -> [<<?LAYOUT_VSN:8, CRC:32/unsigned-integer, Size:32/unsigned-integer>>, Item]
-  end.
+  [<<?LAYOUT_VSN_1:8, ?MAGIC:32/unsigned-integer,
+   CRC:32/unsigned-integer, Size:32/unsigned-integer>>, Item].
 
 collect_stats(HeadItems, SegsOnDisk, Reader) ->
   ItemF = fun(?DISK_CP_ITEM(_Id, Sz, _Item), {B, C}) ->

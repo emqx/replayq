@@ -30,6 +30,22 @@ reopen_test() ->
   ?assertEqual(10, replayq:bytes(Q2)),
   ok = cleanup(Dir).
 
+reopen_v0_test() ->
+  Dir = ?DIR,
+  Config = #{dir => Dir, seg_bytes => 1000},
+  Q0 = replayq:open(Config),
+  #{w_cur := #{fd := Fd}} = Q0, % inspect the opaque internal structure for test
+  file:write(Fd, make_v0_iodata(<<"item1">>)), % append a version-0 item
+  Q2 = replayq:append(Q0, [<<"item2">>]), % append a version-1 itme
+  ok = replayq:close(Q2),
+  Q3 = replayq:open(Config),
+  {Q4, _AckRef, Items} = replayq:pop(Q3, #{count_limit => 3}),
+  %% do not expect item3 because it was appened to a corrupted tail
+  ?assertEqual([<<"item1">>, <<"item2">>], Items),
+  ?assert(replayq:is_empty(Q4)),
+  ok = replayq:close(Q4),
+  ok = cleanup(Dir).
+
 append_pop_disk_default_marshaller_test() ->
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 1},
@@ -179,20 +195,19 @@ commit_in_the_middle_test() ->
   ok = replayq:close(Q5),
   ok = cleanup(Dir).
 
-corrupted_segment_test() ->
-  %% some random injection
-  ok = test_corrupted_segment(<<"foo">>),
-  %% a bad CRC
-  ok = test_corrupted_segment(<<0:8, 0:32, 1:32, 1:8>>),
-  %% zero CRC
-  ok = test_corrupted_segment(<<0:8, 0:32, 0:32, "randomtail">>).
-
+corrupted_segment_test_() ->
+  [{"ramdom", fun() -> test_corrupted_segment(<<"foo">>) end},
+   {"v0-bad-crc", fun() -> test_corrupted_segment(<<0:8, 0:32, 1:32, 1:8>>) end},
+   {"v0-zero-crc", fun() -> test_corrupted_segment(<<0:8, 0:32, 0:32, "randomtail">>) end},
+   {"v1-non-magic", fun() -> test_corrupted_segment(<<1:8, 0:32, 1:32, 1:8>>) end},
+   {"v1-bad-crc-", fun() -> test_corrupted_segment(<<1:8, 841265288:32, 0:32, 1:32, 1:8>>) end}
+  ].
 
 test_corrupted_segment(BadBytes) ->
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 1000},
   Q0 = replayq:open(Config),
-  Q1 = replayq:append(Q0, [<<"item1">>]),
+  Q1 = replayq:append(Q0, [<<"item1">>, <<>>]),
   #{w_cur := #{fd := Fd}} = Q1, % inspect the opaque internal structure for test
   file:write(Fd, BadBytes), % corrupt the file
   Q2 = replayq:append(Q0, [<<"item3">>]),
@@ -200,7 +215,7 @@ test_corrupted_segment(BadBytes) ->
   Q3 = replayq:open(Config),
   {Q4, _AckRef, Items} = replayq:pop(Q3, #{count_limit => 3}),
   %% do not expect item3 because it was appened to a corrupted tail
-  ?assertEqual([<<"item1">>], Items),
+  ?assertEqual([<<"item1">>, <<>>], Items),
   ?assert(replayq:is_empty(Q4)),
   ok = replayq:close(Q4),
   ok = cleanup(Dir).
@@ -230,4 +245,9 @@ data_dir() -> "./test-data".
 uniq() ->
   {_, _, Micro} = erlang:timestamp(),
   Micro.
+
+make_v0_iodata(Item) ->
+  Size = size(Item),
+  CRC = erlang:crc32(Item),
+  [<<0:8, CRC:32/unsigned-integer, Size:32/unsigned-integer>>, Item].
 
