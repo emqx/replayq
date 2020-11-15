@@ -3,18 +3,24 @@
 -include_lib("proper/include/proper.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-run_test_() ->
+run_persistent_test_() ->
   Opts = [{numtests, 1000}, {to_file, user}],
   {timeout, 60,
-   fun() -> ?assert(proper:quickcheck(prop_run(), Opts)) end}.
+   fun() -> ?assert(proper:quickcheck(prop_run(false), Opts)) end}.
 
-prop_run() ->
+run_offload_test_() ->
+  Opts = [{numtests, 1000}, {to_file, user}],
+  {timeout, 60,
+   fun() -> ?assert(proper:quickcheck(prop_run(true), Opts)) end}.
+
+
+prop_run(IsOffload) ->
   ?FORALL({SegBytes, OpList},
-          {prop_seg_bytes(), prop_op_list()},
+          {prop_seg_bytes(), prop_op_list(IsOffload)},
           begin
             Dir = filename:join([data_dir(), integer_to_list(erlang:system_time())]),
             MQ = replayq:open(#{mem_only => true}),
-            Cfg = #{dir => Dir, seg_bytes => SegBytes},
+            Cfg = #{dir => Dir, seg_bytes => SegBytes, offload => IsOffload},
             DQ = replayq:open(Cfg),
             try
               ok = apply_ops(MQ, DQ, OpList, Cfg),
@@ -59,11 +65,12 @@ prop_items() ->
 prop_pop_args() ->
   {_Bytes = proper_types:integer(1,1000), _Count = proper_types:integer(1,10)}.
 
-prop_op_list() ->
-  Union = [{append, prop_items()},
-           {pop_ack, prop_pop_args()},
-           reopen
-          ],
+prop_op_list(IsOffload) ->
+  Base = [{append, prop_items()}, {pop_ack, prop_pop_args()}],
+  Union = case IsOffload of
+            true -> Base; % offload mode does not support reopen
+            false -> [reopen | Base]
+          end,
   proper_types:list(proper_types:oneof(Union)).
 
 delete_dir(Dir) ->

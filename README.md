@@ -43,3 +43,8 @@ Q1 = replayq:append(Q0, [{<<"k1">>, <<"v1">>}, {<<"k2">>, <<"v2">>}]),
 {Q2, AckRef, [{<<"k1">>, <<"v1">>}]} = replayq:pop(Q1, #{count_limit => 1}),
 ok = replayq:ack(Q2, AckRef).
 ```
+
+### Offload mode
+
+In offload mode, the disk queue is only used to offload queue tail segments.
+Add `offload => true` to `Config` for `replayq:open/1`.

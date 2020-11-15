@@ -24,24 +24,27 @@
 -type config() :: #{dir => dir(),
                     seg_bytes => bytes(),
                     mem_only => boolean(),
-                    max_total_bytes => bytes()
+                    max_total_bytes => bytes(),
+                    offload => boolean()
                    }.
 %% writer cursor
+-define(NO_FD, no_fd).
 -type w_cur() :: #{segno := segno(),
                    bytes := bytes(),
                    count := count(),
-                   fd := file:fd()
+                   fd := ?NO_FD | file:fd()
                   }.
 
 -type stats() :: #{bytes := bytes(),
                    count := count()
                   }.
 
--opaque q() :: #{config := config(),
+-define(NO_COMMITTER, no_committer).
+-opaque q() :: #{config := mem_only | config(),
                  stats := stats(),
                  in_mem := queue:queue(in_mem_item()),
                  w_cur => w_cur(),
-                 committer =>  pid(),
+                 committer => ?NO_COMMITTER | pid(),
                  head_segno => segno(),
                  sizer := sizer(),
                  marshaller => marshaller(),
@@ -80,7 +83,15 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
   ok = filelib:ensure_dir(filename:join(Dir, "foo")),
   Sizer = get_sizer(Config),
   Marshaller = get_marshaller(Config),
-  Q = case delete_consumed_and_list_rest(Dir) of
+  IsOffload = is_offload_mode(Config),
+  Q = case delete_consumed_and_list_rest(Dir, IsOffload) of
+        [] when IsOffload ->
+          #{stats => #{bytes => 0, count => 0},
+            w_cur => make_dummy_segment(?FIRST_SEGNO),
+            committer => ?NO_COMMITTER,
+            head_segno => ?FIRST_SEGNO,
+            in_mem => queue:new()
+           };
         [] ->
           %% no old segments
           #{stats => #{bytes => 0, count => 0},
@@ -90,6 +101,7 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
             in_mem => queue:new()
            };
         Segs ->
+          false = IsOffload, % assert
           LastSegno = lists:last(Segs),
           CommitHist = get_commit_hist(Dir),
           Reader = fun(Seg, Ch) -> read_items(Dir, Seg, Ch, Sizer, Marshaller) end,
@@ -109,6 +121,8 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
 
 -spec close(q() | w_cur()) -> ok | {error, any()}.
 close(#{config := mem_only}) -> ok;
+close(#{w_cur := W_Cur, committer := ?NO_COMMITTER}) ->
+  do_close(W_Cur);
 close(#{w_cur := W_Cur, committer := Pid}) ->
   MRef = erlang:monitor(process, Pid),
   Pid ! ?STOP,
@@ -117,10 +131,10 @@ close(#{w_cur := W_Cur, committer := Pid}) ->
     {'DOWN', MRef, process, Pid, _Reason} ->
       ok
   end,
-  close(W_Cur);
-close(#{fd := Fd}) ->
-  file:close(Fd).
+  do_close(W_Cur).
 
+do_close(#{fd := ?NO_FD}) -> ok;
+do_close(#{fd := Fd}) -> file:close(Fd).
 
 -spec append(q(), [item()]) -> q().
 append(Q, []) -> Q;
@@ -154,7 +168,7 @@ append(#{config := #{seg_bytes := BytesLimit, dir := Dir},
         %% very small in size comparing to segment size.
         %% We can change implementation to split items list to avoid
         %% segment overflow if really necessary
-        close(W_Cur1),
+        do_close(W_Cur1),
         open_segment(Dir, ?NEXT_SEGNO(Segno));
       W_Cur1 ->
         W_Cur1
@@ -172,11 +186,16 @@ append(#{config := #{seg_bytes := BytesLimit, dir := Dir},
 %% volume limitted by `bytes_limit' and `count_limit'.
 -spec pop(q(), #{bytes_limit => bytes(), count_limit => count()}) ->
         {q(), ack_ref(), [item()]}.
-pop(Q, Opts) ->
+pop(#{config := Config} = Q, Opts) ->
   Bytes = maps:get(bytes_limit, Opts, ?DEFAULT_POP_BYTES_LIMIT),
   Count = maps:get(count_limit, Opts, ?DEFAULT_POP_COUNT_LIMIT),
   true = (Count > 0),
-  pop(Q, Bytes, Count, ?NOTHING_TO_ACK, []).
+  {NewQ, AckRef, Items} = pop(Q, Bytes, Count, ?NOTHING_TO_ACK, []),
+  %% Nothing to ack in offload mode
+  case is_offload_mode(Config) of
+    true -> {NewQ, ?NOTHING_TO_ACK, Items};
+    false -> {NewQ, AckRef, Items}
+  end.
 
 %% @doc peek the queue front item.
 -spec peek(q()) -> empty | item().
@@ -297,26 +316,48 @@ pop2(#{head_segno := HeadSegno,
       pop(NewQ, Bytes - Sz, Count - 1, NewAckRef, [Item | Acc])
   end.
 
-read_next_seg(#{config := #{dir := Dir},
+read_next_seg(#{config := #{dir := Dir} = Config,
                 head_segno := HeadSegno,
-                w_cur := #{segno := TailSegno, fd := Fd},
+                w_cur := #{segno := TailSegno, fd := Fd} = WCur0,
                 sizer := Sizer,
                 marshaller := Marshaller
                } = Q) ->
   NextSegno = HeadSegno + 1,
+  %% reader has caught up to latest segment
   case NextSegno =:= TailSegno of
-    true -> ok = file:sync(Fd);
-    false -> ok
+    true ->
+      %% force flush to disk so the next read can get all bytes
+      ok = file:sync(Fd);
+    false ->
+      ok
   end,
   NextSegItems = read_items(Dir, NextSegno, ?NO_COMMIT_HIST, Sizer, Marshaller),
+  WCur =
+    case is_offload_mode(Config) andalso NextSegno =:= TailSegno of
+      true ->
+        %% reader has caught up to latest segment in offload mode,
+        %% close the writer's fd
+        do_close(WCur0),
+        WCur0#{fd := ?NO_FD};
+      false ->
+        WCur0
+    end,
+  case is_offload_mode(Config) of
+    true ->
+      %% in case of offload mode, delete the segment immediately after read
+      ensure_deleted(filename(Dir, NextSegno));
+   false ->
+      ok
+  end,
   Q#{head_segno := NextSegno,
-     in_mem := queue:from_list(NextSegItems)
+     in_mem := queue:from_list(NextSegItems),
+     w_cur := WCur
     }.
 
-delete_consumed_and_list_rest(Dir0) ->
+delete_consumed_and_list_rest(Dir0, PurgeAll) ->
   Dir = unicode:characters_to_list(Dir0),
   Segnos0 = lists:sort([parse_segno(N) || N <- filelib:wildcard("*."?SUFFIX, Dir)]),
-  {SegnosToDelete, Segnos} = find_segnos_to_delete(Dir, Segnos0, get_commit_hist(Dir)),
+  {SegnosToDelete, Segnos} = find_segnos_to_delete(Dir, Segnos0, PurgeAll),
   ok = lists:foreach(fun(Segno) -> ensure_deleted(filename(Dir, Segno)) end, SegnosToDelete),
   case Segnos of
     [] ->
@@ -328,8 +369,18 @@ delete_consumed_and_list_rest(Dir0) ->
       X
   end.
 
-find_segnos_to_delete(_Dir, Segnos, ?NO_COMMIT_HIST) -> {[], Segnos};
-find_segnos_to_delete(Dir, Segnos0, {CommittedSegno, CommittedId}) ->
+%% PurgeAll is set to true in case of offload mode.
+%% In offload mode the queue front (where items being popped out) is always in
+%% mem, meaning there is no data loss protection in offload mode, i.e. there
+%% is no point of keeping old messages on disk.
+find_segnos_to_delete(_Dir, Segnos, _PurgeAll = true) ->
+    {Segnos, []};
+find_segnos_to_delete(Dir, Segnos, _PurgeAll = false) ->
+    CommitHist = get_commit_hist(Dir),
+    do_find_segnos_to_delete(Dir, Segnos, CommitHist).
+
+do_find_segnos_to_delete(_Dir, Segnos, ?NO_COMMIT_HIST) -> {[], Segnos};
+do_find_segnos_to_delete(Dir, Segnos0, {CommittedSegno, CommittedId}) ->
   {SegnosToDelete, Segnos} = lists:partition(fun(N) -> N < CommittedSegno end, Segnos0),
   case Segnos =/= [] andalso
        hd(Segnos) =:= CommittedSegno andalso
@@ -412,6 +463,12 @@ commit_filename(Dir) ->
 commit_filename(Dir, Name) ->
   filename:join([Dir, Name]).
 
+do_append(#{fd := ?NO_FD, bytes := Bytes0, count := Count0} = Cur,
+          Count, Bytes, _IoData) ->
+  %% offload mode, fd is not initialized yet
+  Cur#{bytes => Bytes0 + Bytes,
+       count => Count0 + Count
+      };
 do_append(#{fd := Fd, bytes := Bytes0, count := Count0} = Cur,
           Count, Bytes, IoData) ->
   ok = file:write(Fd, IoData),
@@ -514,9 +571,15 @@ open_segment(Dir, Segno) ->
   {ok, Fd} = file:open(Filename, [raw, read, write, binary, delayed_write]),
   #{fd => Fd, segno => Segno, bytes => 0, count => 0}.
 
+make_dummy_segment(Segno) ->
+  #{fd => ?NO_FD, segno => Segno, bytes => 0, count => 0}.
+
 get_sizer(C) ->
   maps:get(sizer, C, ?DEFAULT_SIZER).
 
 get_marshaller(C) ->
   maps:get(marshaller, C, ?DEFAULT_MARSHALLER).
 
+is_offload_mode(mem_only) -> false;
+is_offload_mode(Config) when is_map(Config) ->
+    maps:get(offload, Config, false).
