@@ -25,7 +25,9 @@
                     seg_bytes => bytes(),
                     mem_only => boolean(),
                     max_total_bytes => bytes(),
-                    offload => boolean()
+                    offload => boolean(),
+                    sizer => sizer(),
+                    marshaller => marshaller()
                    }.
 %% writer cursor
 -define(NO_FD, no_fd).
