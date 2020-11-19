@@ -30,6 +30,36 @@ reopen_test() ->
   ?assertEqual(10, replayq:bytes(Q2)),
   ok = cleanup(Dir).
 
+offload_file_test() ->
+  Dir = ?DIR,
+  Config = #{dir => Dir, seg_bytes => 10, offload => true},
+  Q0 = replayq:open(Config),
+  Q1 = replayq:append(Q0, [<<"item1">>]), % in mem
+  ?assertMatch([], list_segments(Dir)),
+  ?assertMatch(#{w_cur := #{fd := no_fd}}, Q1),
+  Q2 = replayq:append(Q1, [<<"item2">>]), % in mem, but trigger seg 2 to create
+  ?assertEqual([filename(2)], list_segments(Dir)),
+  Q3 = replayq:append(Q2, [<<"item3">>, <<"item4">>]), % in seg 2, trigger seg 3 to create
+  ?assertEqual([filename(2), filename(3)], list_segments(Dir)),
+  {Q4, AckRef, Items} = replayq:pop(Q3, #{}),
+  ?assertEqual(nothing_to_ack, AckRef),
+  ?assertEqual([<<"item1">>, <<"item2">>, <<"item3">>, <<"item4">>], Items),
+  ?assertEqual([], list_segments(Dir)), % files are deleted after read (no need for commit)
+  ok = replayq:close(Q4),
+  ok = cleanup(Dir).
+
+offload_reopen_test() ->
+  Dir = ?DIR,
+  Config = #{dir => Dir, seg_bytes => 100, offload => true},
+  Q0 = replayq:open(Config),
+  Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
+  ?assertMatch(#{w_cur := #{fd := no_fd}}, Q1),
+  ok = replayq:close(Q1),
+  Q2 = replayq:open(Config),
+  ?assertEqual(0, replayq:count(Q2)),
+  ?assertEqual(0, replayq:bytes(Q2)),
+  ok = cleanup(Dir).
+
 reopen_v0_test() ->
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 1000},
@@ -235,10 +265,12 @@ comitter_crash_test() ->
 %% helpers ===========================================================
 
 cleanup(Dir) ->
-  Files = filelib:wildcard("*."?SUFFIX, Dir),
+  Files = list_segments(Dir),
   ok = lists:foreach(fun(F) -> ok = file:delete(filename:join(Dir, F)) end, Files),
   _ = file:delete(filename:join(Dir, "COMMIT")),
   ok = file:del_dir(Dir).
+
+list_segments(Dir) -> filelib:wildcard("*."?SUFFIX, Dir).
 
 data_dir() -> "./test-data".
 
@@ -250,4 +282,7 @@ make_v0_iodata(Item) ->
   Size = size(Item),
   CRC = erlang:crc32(Item),
   [<<0:8, CRC:32/unsigned-integer, Size:32/unsigned-integer>>, Item].
+
+filename(Segno) ->
+  lists:flatten(io_lib:format("~10.10.0w."?SUFFIX, [Segno])).
 
