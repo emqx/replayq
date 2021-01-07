@@ -1,7 +1,7 @@
 -module(replayq).
 
 -export([open/1, close/1]).
--export([append/2, pop/2, ack/2, ack_sync/2, peek/1]).
+-export([append/2, pop/2, ack/2, ack_sync/2, peek/1, overflow/1]).
 -export([count/1, bytes/1, is_empty/1]).
 
 
@@ -148,9 +148,9 @@ append(#{config := mem_only,
   {CountDiff, BytesDiff, Items} = transform(false, Items0, Sizer),
 
   Stats = #{count => Count0 + CountDiff, bytes => Bytes0 + BytesDiff},
-  clean(Q#{stats := Stats,
-           in_mem := append_in_mem(Items, InMem)
-          });
+  Q#{stats := Stats,
+     in_mem := append_in_mem(Items, InMem)
+    };
 append(#{config := #{seg_bytes := BytesLimit, dir := Dir},
          stats := #{bytes := Bytes0, count := Count0},
          w_cur := #{count := CountInSeg, segno := WriterSegno} = W_Cur0,
@@ -180,9 +180,9 @@ append(#{config := #{seg_bytes := BytesLimit, dir := Dir},
       true -> append_in_mem(Items, HeadItems0);
       false -> HeadItems0
     end,
-  clean(Q#{stats := Stats,
-           w_cur := W_Cur,
-           in_mem := HeadItems}).
+  Q#{stats := Stats,
+     w_cur := W_Cur,
+     in_mem := HeadItems}.
 
 %% @doc pop out at least one item from the queue.
 %% volume limitted by `bytes_limit' and `count_limit'.
@@ -238,17 +238,14 @@ is_empty(#{w_cur := #{segno := TailSegno},
   Result = ((TailSegno =:= HeadSegno) andalso queue:is_empty(HeadItems)),
   Result = (count(Q) =:= 0). %% assert
 
-%% internals =========================================================
+%% @doc Returns number of bytes the size of the queue has exceeded
+%% total bytes limit. Result is negative when it is not overflow.
+-spec overflow(q()) -> integer().
+overflow(#{max_total_bytes := MaxTotalBytes,
+           stats := #{bytes := Bytes}
+          }) -> Bytes - MaxTotalBytes.
 
-clean(#{max_total_bytes := MaxTotalBytes,
-        stats := #{bytes := Bytes}
-       } = Q) when MaxTotalBytes < Bytes ->
-      {Q1, AckRef, _Items} =
-        pop(Q, #{bytes_limit => (Bytes - MaxTotalBytes)}),
-      ok = ack(Q1, AckRef),
-      Q1;
-clean(Q) ->
-      Q.
+%% internals =========================================================
 
 transform(Id, Items, Sizer) ->
   transform(Id, Items, Sizer, 0, 0, []).
