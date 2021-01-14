@@ -176,9 +176,11 @@ append_max_total_bytes_disk_test() ->
 
 test_append_max_total_bytes(Config) ->
   Q0 = replayq:open(Config),
+  ?assertEqual(-10, replayq:overflow(Q0)),
   Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>, <<"item3">>, <<"item4">>]),
-  {Q2, _AckRef, Items} = replayq:pop(Q1, #{count_limit => 1}),
-  ?assertEqual([<<"item3">>], Items),
+  ?assertEqual(10, replayq:overflow(Q1)),
+  {Q2, _AckRef, _Items} = replayq:pop(Q1, #{count_limit => 2}),
+  ?assertEqual(0, replayq:overflow(Q2)),
   ok = replayq:close(Q2).
 
 pop_limit_disk_test() ->
