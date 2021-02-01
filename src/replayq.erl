@@ -416,20 +416,12 @@ spawn_committer(HeadSegno, Dir) ->
 
 committer_loop(HeadSegno, Dir) ->
   receive
+    ?COMMIT(Segno0, Id0, false) ->
+      {Segno, Id} = collect_async_commits(Segno0, Id0),
+      ok = handle_commit(HeadSegno, Dir, Segno, Id, false),
+      ?MODULE:committer_loop(Segno, Dir);
     ?COMMIT(Segno, Id, From) ->
-      IoData = io_lib:format("~p.\n", [#{segno => Segno, id => Id}]),
-      ok = do_commit(Dir, IoData),
-      case Segno > HeadSegno of
-        true ->
-          SegnosToDelete = lists:seq(HeadSegno, Segno - 1),
-          lists:foreach(fun(N) -> ok = ensure_deleted(filename(Dir, N)) end, SegnosToDelete);
-        false ->
-          ok
-      end,
-      case From of
-        {Pid, Ref} -> Pid ! {Ref, ok};
-        _ -> ok
-      end,
+      ok = handle_commit(HeadSegno, Dir, Segno, Id, From),
       ?MODULE:committer_loop(Segno, Dir);
     ?STOP ->
       ok;
@@ -439,6 +431,35 @@ committer_loop(HeadSegno, Dir) ->
     200 ->
       ?MODULE:committer_loop(HeadSegno, Dir)
   end.
+
+handle_commit(HeadSegno, Dir, Segno, Id, From) ->
+  IoData = io_lib:format("~p.\n", [#{segno => Segno, id => Id}]),
+  ok = do_commit(Dir, IoData),
+  case Segno > HeadSegno of
+    true ->
+      SegnosToDelete = lists:seq(HeadSegno, Segno - 1),
+      lists:foreach(fun(N) -> ok = ensure_deleted(filename(Dir, N)) end, SegnosToDelete);
+    false ->
+      ok
+  end,
+  ok = reply_ack_ok(From).
+
+%% Collect async acks which are already sent in the mailbox,
+%% and keep only the last one for the current segment.
+collect_async_commits(Segno, Id) ->
+  receive
+    ?COMMIT(Segno, AnotherId, false) ->
+      collect_async_commits(Segno, AnotherId)
+  after
+    0 ->
+      {Segno, Id}
+  end.
+
+reply_ack_ok({Pid, Ref}) ->
+  Pid ! {Ref, ok},
+  ok;
+reply_ack_ok(_) ->
+  ok.
 
 get_commit_hist(Dir) ->
   CommitFile = commit_filename(Dir),

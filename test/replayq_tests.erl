@@ -108,7 +108,7 @@ test_append_pop_disk(#{dir := Dir} = Config) ->
                                             bytes_limit => 1000}),
   ?assertEqual(AckRef, AckRef1),
   ?assertEqual(Items, Items1),
-  ok = replayq:ack(Q5, AckRef),
+  lists:foreach(fun(_) -> ok = replayq:ack(Q5, AckRef) end, lists:seq(1, 100)),
   ok = replayq:close(Q5),
   Q6 = replayq:open(Config),
   ?assert(replayq:is_empty(Q6)),
