@@ -8,10 +8,10 @@ run_persistent_test_() ->
   {timeout, 60,
    fun() -> ?assert(proper:quickcheck(prop_run(false), Opts)) end}.
 
-% run_offload_test_() ->
-%   Opts = [{numtests, 1000}, {to_file, user}],
-%   {timeout, 60,
-%    fun() -> ?assert(proper:quickcheck(prop_run(true), Opts)) end}.
+run_offload_test_() ->
+  Opts = [{numtests, 1000}, {to_file, user}],
+  {timeout, 60,
+   fun() -> ?assert(proper:quickcheck(prop_run(true), Opts)) end}.
 
 
 prop_run(IsOffload) ->
@@ -68,7 +68,7 @@ prop_pop_args() ->
 prop_op_list(IsOffload) ->
   Base = [{append, prop_items()}, {pop_ack, prop_pop_args()}],
   Union = case IsOffload of
-            true -> Base; % offload mode does not support reopen
+            true -> Base; %% can not support reopen in proptest
             false -> [reopen | Base]
           end,
   proper_types:list(proper_types:oneof(Union)).
@@ -84,8 +84,8 @@ compare_stats(MQ, DQ) ->
   ok.
 
 compare(Q1, Q2) ->
-  {NewQ1, _, Items1} = replayq:pop(Q1, #{}),
-  {NewQ2, _, Items2} = replayq:pop(Q2, #{}),
+  {NewQ1, _, Items1} = replayq:pop(Q1, #{count_limit => 1}),
+  {NewQ2, _, Items2} = replayq:pop(Q2, #{count_limit => 1}),
   case Items1 =:= Items2 of
     true when Items1 =:= [] -> ok; %% done
     true -> compare(NewQ1, NewQ2);

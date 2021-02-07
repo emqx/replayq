@@ -3,7 +3,8 @@
 -export([open/1, close/1]).
 -export([append/2, pop/2, ack/2, ack_sync/2, peek/1, overflow/1]).
 -export([count/1, bytes/1, is_empty/1]).
-
+%% exported for troubleshooting
+-export([do_read_items/2]).
 
 %% internal exports for beam reload
 -export([committer_loop/2, default_sizer/1, default_marshaller/1]).
@@ -11,6 +12,7 @@
 -export_type([config/0, q/0, ack_ref/0, sizer/0, marshaller/0]).
 
 -define(NOTHING_TO_ACK, nothing_to_ack).
+-define(PENDING_ACKS(Ref), {replayq_pending_acks, Ref}).
 
 -type segno() :: pos_integer().
 -type item() :: term().
@@ -114,7 +116,7 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
 
 -spec close(q() | w_cur()) -> ok | {error, any()}.
 close(#{config := mem_only}) -> ok;
-close(#{w_cur := W_Cur, committer := Pid}) ->
+close(#{w_cur := W_Cur, committer := Pid} = Q) ->
   MRef = erlang:monitor(process, Pid),
   Pid ! ?STOP,
   unlink(Pid),
@@ -122,10 +124,60 @@ close(#{w_cur := W_Cur, committer := Pid}) ->
     {'DOWN', MRef, process, Pid, _Reason} ->
       ok
   end,
+  ok = maybe_dump_back_to_disk(Q),
   do_close(W_Cur).
 
 do_close(#{fd := ?NO_FD}) -> ok;
 do_close(#{fd := Fd}) -> file:close(Fd).
+
+%% In case of offload mode, dump the unacked (and un-popped) on disk
+%% before close. this serves as a best-effort data loss protection
+maybe_dump_back_to_disk(#{config := Config} = Q) ->
+  case is_offload_mode(Config) of
+    true  -> dump_back_to_disk(Q);
+    false -> ok
+  end.
+
+dump_back_to_disk(#{config := #{dir := Dir},
+                    head_segno := ReaderSegno,
+                    in_mem := InMem,
+                    marshaller := Marshaller
+                   }) ->
+  IoData0 = get_unacked(process_info(self(), dictionary), ReaderSegno, Marshaller),
+  Items1 = queue:to_list(InMem),
+  IoData1 = lists:map(fun(?DISK_CP_ITEM(_, _, I)) -> make_iodata(I, Marshaller) end, Items1),
+  %% ensure old segment file is deleted
+  ok = ensure_deleted(filename(Dir, ReaderSegno)),
+  %% rewrite the segment with what's currently in memory
+  IoData = [IoData0, IoData1],
+  case iolist_size(IoData) > 0 of
+    true ->
+      #{fd := Fd} = open_segment(Dir, ReaderSegno),
+      ok = file:write(Fd, [IoData0, IoData1]),
+      ok = file:close(Fd);
+    false ->
+      %% nothing to write
+      ok
+  end.
+
+get_unacked({dictionary, Dict}, ReaderSegno, Marshaller) ->
+  F = fun({?PENDING_ACKS(AckRef), Items}) ->
+            erase(?PENDING_ACKS(AckRef)),
+            {Segno, Id} = AckRef,
+            Segno =:= ReaderSegno andalso
+            {true, {Id, Items}};
+         (_) ->
+            false
+      end,
+  Pendings0 = lists:filtermap(F, Dict),
+  Pendings = lists:keysort(1, Pendings0),
+  do_get_unacked(Pendings, Marshaller).
+
+do_get_unacked([], _Marshaller) -> [];
+do_get_unacked([{_, Items} | Rest], Marshaller) ->
+    [ [make_iodata(I, Marshaller) || I <- Items]
+    | do_get_unacked(Rest, Marshaller)
+    ].
 
 -spec append(q(), [item()]) -> q().
 append(Q, []) -> Q;
@@ -193,14 +245,16 @@ peek(#{in_mem := HeadItems}) ->
 %% @doc Asynch-ly write the consumed item Segment number + ID to a file.
 -spec ack(q(), ack_ref()) -> ok.
 ack(_, ?NOTHING_TO_ACK) -> ok;
-ack(#{committer := Pid}, {Segno, Id}) ->
+ack(#{committer := Pid}, {Segno, Id} = AckRef) ->
+  _ = erlang:erase(?PENDING_ACKS(AckRef)),
   Pid ! ?COMMIT(Segno, Id, false),
   ok.
 
 %% @hidden Synced ack, for deterministic tests only
 -spec ack_sync(q(), ack_ref()) -> ok.
 ack_sync(_, ?NOTHING_TO_ACK) -> ok;
-ack_sync(#{committer := Pid}, {Segno, Id}) ->
+ack_sync(#{committer := Pid}, {Segno, Id} = AckRef) ->
+  _ = erlang:erase(?PENDING_ACKS(AckRef)),
   Ref = make_ref(),
   Pid ! ?COMMIT(Segno, Id, {self(), Ref}),
   receive {Ref, ok} -> ok end.
@@ -247,7 +301,9 @@ append_in_mem([], Q) -> Q;
 append_in_mem([Item | Rest], Q) -> append_in_mem(Rest, queue:in(Item, Q)).
 
 pop(Q, _Bytes, 0, AckRef, Acc) ->
-  {Q, AckRef, lists:reverse(Acc)};
+  Result = lists:reverse(Acc),
+  ok = maybe_save_pending_acks(AckRef, Q, Result),
+  {Q, AckRef, Result};
 pop(#{config := Cfg} = Q, Bytes, Count, AckRef, Acc) ->
   case is_empty(Q) of
     true ->
@@ -297,6 +353,18 @@ pop2(#{head_segno := ReaderSegno,
       pop(NewQ, Bytes - Sz, Count - 1, NewAckRef, [Item | Acc])
   end.
 
+%% due to backward compatibility reasons for the ack api
+%% we ca nnot track pending acks in q() -- reason to use process dictionary
+maybe_save_pending_acks(?NOTHING_TO_ACK, _, _) -> ok;
+maybe_save_pending_acks(AckRef, #{config := Config}, Items) ->
+  case is_offload_mode(Config) of
+    true ->
+      _ = erlang:put(?PENDING_ACKS(AckRef), Items),
+      ok;
+    false ->
+      ok
+  end.
+
 read_next_seg(#{config := #{dir := Dir} = Config,
                 head_segno := ReaderSegno,
                 w_cur := #{segno := WriterSegno, fd := Fd} = WCur0,
@@ -312,17 +380,18 @@ read_next_seg(#{config := #{dir := Dir} = Config,
     false ->
       ok
   end,
-  NextSegItems = read_items(Dir, NextSegno, ?NO_COMMIT_HIST, Sizer, Marshaller),
+  IsOffload = is_offload_mode(Config),
   WCur =
-    case is_offload_mode(Config) andalso NextSegno =:= WriterSegno of
+    case IsOffload andalso NextSegno =:= WriterSegno of
       true ->
         %% reader has caught up to latest segment in offload mode,
-        %% close the writer's fd
+        %% close the writer's fd. Continue in mem-only mode for the head segment
         ok = do_close(WCur0),
         WCur0#{fd := ?NO_FD};
       false ->
         WCur0
     end,
+  NextSegItems = read_items(Dir, NextSegno, ?NO_COMMIT_HIST, Sizer, Marshaller),
   Q#{head_segno := NextSegno,
      in_mem := queue:from_list(NextSegItems),
      w_cur := WCur
@@ -572,7 +641,7 @@ get_marshaller(C) ->
   maps:get(marshaller, C, fun ?MODULE:default_marshaller/1).
 
 is_offload_mode(Config) when is_map(Config) ->
-    maps:get(offload, Config, false).
+  maps:get(offload, Config, false).
 
 default_sizer(I) when is_binary(I) -> erlang:size(I).
 
@@ -580,23 +649,23 @@ default_marshaller(I) when is_binary(I) -> I.
 
 is_segment_full(#{segno := WriterSegno, bytes := SegmentBytes},
                 TotalBytes, SegmentBytesLimit, ReaderSegno, true) ->
-    %% in offload mode, when reader is lagging behind, we try
-    %% writer rolls to a new segment when file size limit is reached
-    %% when reader is reading off from the same segment as writer
-    %% i.e. the in memory queue, only start writing to segment file
-    %% when total bytes (in memory) is reached segment limit
-    %%
-    %% NOTE: we never shrink segment bytes, even when popping out
-    %% from the in-memory queue.
-    case ReaderSegno < WriterSegno of
-        true  -> SegmentBytes >= SegmentBytesLimit;
-        false -> TotalBytes >= SegmentBytesLimit
-    end;
+  %% in offload mode, when reader is lagging behind, we try
+  %% writer rolls to a new segment when file size limit is reached
+  %% when reader is reading off from the same segment as writer
+  %% i.e. the in memory queue, only start writing to segment file
+  %% when total bytes (in memory) is reached segment limit
+  %%
+  %% NOTE: we never shrink segment bytes, even when popping out
+  %% from the in-memory queue.
+  case ReaderSegno < WriterSegno of
+    true  -> SegmentBytes >= SegmentBytesLimit;
+    false -> TotalBytes >= SegmentBytesLimit
+  end;
 is_segment_full(#{bytes := SegmentBytes},
                 _TotalBytes, SegmentBytesLimit, _ReaderSegno, false) ->
-   %% here we check if segment size is greater than segment size limit
-   %% after append based on the assumption that the items are usually
-   %% very small in size comparing to segment size.
-   %% We can change implementation to split items list to avoid
-   %% segment overflow if really necessary
-   SegmentBytes >= SegmentBytesLimit.
+  %% here we check if segment size is greater than segment size limit
+  %% after append based on the assumption that the items are usually
+  %% very small in size comparing to segment size.
+  %% We can change implementation to split items list to avoid
+  %% segment overflow if really necessary
+  SegmentBytes >= SegmentBytesLimit.
