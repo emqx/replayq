@@ -8,10 +8,10 @@ run_persistent_test_() ->
   {timeout, 60,
    fun() -> ?assert(proper:quickcheck(prop_run(false), Opts)) end}.
 
-run_offload_test_() ->
-  Opts = [{numtests, 1000}, {to_file, user}],
-  {timeout, 60,
-   fun() -> ?assert(proper:quickcheck(prop_run(true), Opts)) end}.
+% run_offload_test_() ->
+%   Opts = [{numtests, 1000}, {to_file, user}],
+%   {timeout, 60,
+%    fun() -> ?assert(proper:quickcheck(prop_run(true), Opts)) end}.
 
 
 prop_run(IsOffload) ->
