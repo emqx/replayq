@@ -30,6 +30,23 @@ reopen_test() ->
   ?assertEqual(10, replayq:bytes(Q2)),
   ok = cleanup(Dir).
 
+%% when popping from in-mem segment, the segment size stats may overflow
+%% but not consuming as much memory
+offload_in_mem_seg_overflow_test() ->
+  Dir = ?DIR,
+  Config = #{dir => Dir, seg_bytes => 11, offload => true},
+  Q0 = replayq:open(Config),
+  Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]), % in mem, one byte left
+  ?assertMatch([], list_segments(Dir)), % not offloading to disk yet
+  ?assertMatch(#{w_cur := #{fd := no_fd}}, Q1),
+  {Q2, _AckRef1, Items1} = replayq:pop(Q1, #{}),
+  ?assertEqual([<<"item1">>, <<"item2">>], Items1),
+  Q3 = replayq:append(Q2, [<<"item3">>]), %% still in mem
+  ?assertMatch([], list_segments(Dir)), % not offloading to disk yet
+  ?assertMatch(#{w_cur := #{fd := no_fd}}, Q3),
+  ok = replayq:close(Q3),
+  ok = cleanup(Dir).
+
 offload_file_test() ->
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 10, offload => true},
@@ -41,11 +58,20 @@ offload_file_test() ->
   ?assertEqual([filename(2)], list_segments(Dir)),
   Q3 = replayq:append(Q2, [<<"item3">>, <<"item4">>]), % in seg 2, trigger seg 3 to create
   ?assertEqual([filename(2), filename(3)], list_segments(Dir)),
-  {Q4, AckRef, Items} = replayq:pop(Q3, #{}),
-  ?assertEqual(nothing_to_ack, AckRef),
-  ?assertEqual([<<"item1">>, <<"item2">>, <<"item3">>, <<"item4">>], Items),
-  ?assertEqual([], list_segments(Dir)), % files are deleted after read (no need for commit)
-  ok = replayq:close(Q4),
+  {Q4, AckRef1, Items1} = replayq:pop(Q3, #{count_limit => 2}),
+  ?assertEqual([<<"item1">>, <<"item2">>], Items1),
+  ok = replayq:ack_sync(Q4, AckRef1),
+  ?assertEqual([filename(2), filename(3)], list_segments(Dir)),
+  {Q5, AckRef2, Items2} = replayq:pop(Q4, #{}),
+  ?assertEqual({2, 2}, AckRef2),
+  ?assertEqual([<<"item3">>, <<"item4">>], Items2),
+  ok = replayq:ack_sync(Q5, AckRef2), %% caught up
+  ?assertEqual([filename(2), filename(3)], list_segments(Dir)),
+  Q6 = replayq:append(Q5, [<<"item5">>]), % in seg 3
+  {Q7, AckRef3, Items3} = replayq:pop(Q6, #{}),
+  ?assertEqual([<<"item5">>], Items3),
+  ok = replayq:ack_sync(Q7, AckRef3),
+  ok = replayq:close(Q7),
   ok = cleanup(Dir).
 
 offload_reopen_test() ->
@@ -54,10 +80,21 @@ offload_reopen_test() ->
   Q0 = replayq:open(Config),
   Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
   ?assertMatch(#{w_cur := #{fd := no_fd}}, Q1),
-  ok = replayq:close(Q1),
-  Q2 = replayq:open(Config),
-  ?assertEqual(0, replayq:count(Q2)),
-  ?assertEqual(0, replayq:bytes(Q2)),
+  put(noise, noise), % should be filtered out
+  {Q2, _AckRef, Items} = replayq:pop(Q1, #{count_limit => 1}),
+  ?assertEqual([<<"item1">>], Items),
+  ok = replayq:close(Q2),
+  Q3 = replayq:open(Config),
+  ?assertEqual(2, replayq:count(Q3)),
+  ?assertEqual(10, replayq:bytes(Q3)),
+  {Q4, AckRef1, Items1} = replayq:pop(Q3, #{count_limit => 2}),
+  ?assertEqual([<<"item1">>, <<"item2">>], Items1),
+  ?assertEqual([filename(1), filename(2)], list_segments(Dir)),
+  ok = replayq:ack_sync(Q4, AckRef1),
+  ok = replayq:close(Q4),
+  Q5 = replayq:open(Config),
+  ?assertEqual(0, replayq:count(Q5)),
+  ?assertEqual(0, replayq:bytes(Q5)),
   ok = cleanup(Dir).
 
 reopen_v0_test() ->
