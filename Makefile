@@ -40,3 +40,7 @@ cover:
 .PHONY: coveralls
 coveralls:
 	@rebar3 coveralls send
+
+.PHONY: hex-publish
+hex-publish:
+	@rebar3 hex publish
