@@ -301,6 +301,20 @@ comitter_crash_test() ->
       ok
   end.
 
+is_in_mem_test_() ->
+  [ {"mem queue", fun() ->
+                      Q = replayq:open(#{mem_only => true}),
+                      true = replayq:is_mem_only(Q),
+                      ok = replayq:close(Q)
+                  end}
+  , {"disk queue", fun() ->
+                       Config = #{dir => ?DIR, seg_bytes => 100},
+                       Q = replayq:open(Config),
+                       false = replayq:is_mem_only(Q),
+                       ok = replayq:close(Q)
+                   end}
+  ].
+
 %% helpers ===========================================================
 
 cleanup(Dir) ->
@@ -324,4 +338,3 @@ make_v0_iodata(Item) ->
 
 filename(Segno) ->
   lists:flatten(io_lib:format("~10.10.0w."?SUFFIX, [Segno])).
-

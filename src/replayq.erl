@@ -2,7 +2,7 @@
 
 -export([open/1, close/1]).
 -export([append/2, pop/2, ack/2, ack_sync/2, peek/1, overflow/1]).
--export([count/1, bytes/1, is_empty/1]).
+-export([count/1, bytes/1, is_empty/1, is_mem_only/1]).
 %% exported for troubleshooting
 -export([do_read_items/2]).
 
@@ -280,6 +280,12 @@ is_empty(#{w_cur := #{segno := WriterSegno},
 overflow(#{max_total_bytes := MaxTotalBytes,
            stats := #{bytes := Bytes}
           }) -> Bytes - MaxTotalBytes.
+
+-spec is_mem_only(q()) -> boolean().
+is_mem_only(#{config := mem_only}) ->
+  true;
+is_mem_only(_) ->
+  false.
 
 %% internals =========================================================
 
