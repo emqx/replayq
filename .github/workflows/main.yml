@@ -1,0 +1,25 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        otp: [23.2, 24.0.2]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: recursive
+      - uses: gleam-lang/setup-erlang@v1.1.2
+        with:
+          otp-version: ${{ matrix.otp }}
+      - run: |
+          make
+      - name: Archive CT Logs
+        uses: actions/upload-artifact@v2
+        with:
+          name: ct-logs
+          path: _build/test/
+          retention-days: 1
