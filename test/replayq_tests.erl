@@ -107,7 +107,7 @@ reopen_v0_test() ->
   ok = replayq:close(Q2),
   Q3 = replayq:open(Config),
   {Q4, _AckRef, Items} = replayq:pop(Q3, #{count_limit => 3}),
-  %% do not expect item3 because it was appened to a corrupted tail
+  %% do not expect item3 because it was appended to a corrupted tail
   ?assertEqual([<<"item1">>, <<"item2">>], Items),
   ?assert(replayq:is_empty(Q4)),
   ok = replayq:close(Q4),
@@ -283,7 +283,7 @@ test_corrupted_segment(BadBytes) ->
   ok = replayq:close(Q2),
   Q3 = replayq:open(Config),
   {Q4, _AckRef, Items} = replayq:pop(Q3, #{count_limit => 3}),
-  %% do not expect item3 because it was appened to a corrupted tail
+  %% do not expect item3 because it was appended to a corrupted tail
   ?assertEqual([<<"item1">>, <<>>], Items),
   ?assert(replayq:is_empty(Q4)),
   ok = replayq:close(Q4),

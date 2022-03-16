@@ -224,7 +224,7 @@ append(#{config := #{seg_bytes := BytesLimit, dir := Dir} = Config,
      in_mem := HeadItems}.
 
 %% @doc pop out at least one item from the queue.
-%% volume limitted by `bytes_limit' and `count_limit'.
+%% volume limited by `bytes_limit' and `count_limit'.
 -spec pop(q(), #{bytes_limit => bytes(), count_limit => count()}) ->
         {q(), ack_ref(), [item()]}.
 pop(Q, Opts) ->
