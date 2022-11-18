@@ -264,6 +264,78 @@ commit_in_the_middle_test() ->
   ok = replayq:close(Q5),
   ok = cleanup(Dir).
 
+first_segment_corrupted_test() ->
+  Dir = ?DIR,
+  SegBytes = 10,
+  Config = #{dir => Dir, seg_bytes => SegBytes},
+  Item = iolist_to_binary(lists:duplicate(SegBytes, "a")),
+  Q0 = replayq:open(Config),
+  ok = corrupt(Q0),
+  Q1 = replayq:append(Q0, [Item]), %% to the first (corrputed) segment
+  Q2 = replayq:append(Q1, [Item]), %% to the second segment
+  %% assert it has rolled to the 3rd segment
+  ?assertMatch(#{head_segno := 1, w_cur := #{segno := 3}}, Q2),
+  replayq:close(Q2),
+  %% reopen to discover that the first segment is corrupted
+  Q3 = replayq:open(Config),
+  ?assertEqual(1, replayq:count(Q3)),
+  {Q4, _AckRef, Items} = replayq:pop(Q3, #{count_limit => 3}),
+  ?assertEqual([Item], Items),
+  ?assert(replayq:is_empty(Q4)),
+  ok = replayq:close(Q4),
+  ok = cleanup(Dir).
+
+second_segment_corrupted_test() ->
+  Dir = ?DIR,
+  SegBytes = 10,
+  Config = #{dir => Dir, seg_bytes => SegBytes},
+  Item = iolist_to_binary(lists:duplicate(SegBytes, "a")),
+  Q0 = replayq:open(Config),
+  Q1 = replayq:append(Q0, [Item]), %% to the first segment
+  ok = corrupt(Q1),
+  Q2 = replayq:append(Q1, [Item]), %% to the second (corrupted) segment
+  Q3 = replayq:append(Q2, [Item]), %% to the thrid segment
+  %% assert it has rolled to the 4th segment
+  ?assertMatch(#{head_segno := 1, w_cur := #{segno := 4}}, Q3),
+  replayq:close(Q3),
+  %% reopen to discover that the second segment is corrupted
+  Q4 = replayq:open(Config),
+  ?assertEqual(2, replayq:count(Q4)),
+  {Q5, _AckRef, Items} = replayq:pop(Q4, #{count_limit => 3}),
+  ?assertEqual([Item, Item], Items),
+  ?assert(replayq:is_empty(Q5)),
+  ok = replayq:close(Q5),
+  ok = cleanup(Dir).
+
+last_segment_corrupted_test() ->
+  Dir = ?DIR,
+  SegBytes = 10,
+  Config = #{dir => Dir, seg_bytes => SegBytes},
+  Item = iolist_to_binary(lists:duplicate(SegBytes, "a")),
+  Q0 = replayq:open(Config),
+  Q1 = replayq:append(Q0, [Item]), %% to the first segment
+  Q2 = replayq:append(Q1, [Item]), %% to the second segment
+  ok = corrupt(Q2),
+  Q3 = replayq:append(Q2, [<<"thridsegment">>]), %% to the thrid (corrupted) segment
+  replayq:close(Q3),
+  %% reopen to discover that the third segment is corrupted
+  Q4 = replayq:open(Config),
+  ?assertEqual(2, replayq:count(Q4)),
+  {Q5, _AckRef, Items} = replayq:pop(Q4, #{count_limit => 3}),
+  ?assertEqual([Item, Item], Items),
+  LastMsg = <<"yes, can still append">>,
+  Q6 = replayq:append(Q5, [LastMsg]),
+  ?assertEqual(1, replayq:count(Q6)),
+  {Q7, AckRef, [LastMsg]} = replayq:pop(Q6, #{count_limit => 3}),
+  ?assert(replayq:is_empty(Q7)),
+  replayq:ack(Q7, AckRef),
+  ok = replayq:close(Q7),
+  %% try to open again to check size
+  Q8 = replayq:open(Config),
+  ?assert(replayq:is_empty(Q8)),
+  replayq:ack(Q7, AckRef),
+  ok = cleanup(Dir).
+
 corrupted_segment_test_() ->
   [{"ramdom", fun() -> test_corrupted_segment(<<"foo">>) end},
    {"v0-bad-crc", fun() -> test_corrupted_segment(<<0:8, 0:32, 1:32, 1:8>>) end},
@@ -276,7 +348,8 @@ test_corrupted_segment(BadBytes) ->
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 1000},
   Q0 = replayq:open(Config),
-  Q1 = replayq:append(Q0, [<<"item1">>, <<>>]),
+  Item2 = <<>>,
+  Q1 = replayq:append(Q0, [<<"item1">>, Item2]),
   #{w_cur := #{fd := Fd}} = Q1, % inspect the opaque internal structure for test
   file:write(Fd, BadBytes), % corrupt the file
   Q2 = replayq:append(Q0, [<<"item3">>]),
@@ -284,7 +357,7 @@ test_corrupted_segment(BadBytes) ->
   Q3 = replayq:open(Config),
   {Q4, _AckRef, Items} = replayq:pop(Q3, #{count_limit => 3}),
   %% do not expect item3 because it was appended to a corrupted tail
-  ?assertEqual([<<"item1">>, <<>>], Items),
+  ?assertEqual([<<"item1">>, Item2], Items),
   ?assert(replayq:is_empty(Q4)),
   ok = replayq:close(Q4),
   ok = cleanup(Dir).
@@ -338,3 +411,7 @@ make_v0_iodata(Item) ->
 
 filename(Segno) ->
   lists:flatten(io_lib:format("~10.10.0w."?SUFFIX, [Segno])).
+
+%% corrupt the segment
+corrupt(#{w_cur := #{fd := Fd}}) ->
+  file:write(Fd, "some random bytes").
