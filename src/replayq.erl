@@ -337,10 +337,12 @@ pop_mem(#{in_mem := InMem,
 
 pop2(#{head_segno := ReaderSegno,
        in_mem := HeadItems,
-       stats := #{count := TotalCount, bytes := TotalBytes} = Stats,
-       w_cur := #{segno := WriterSegno}
+       stats := #{count := TotalCount, bytes := TotalBytes} = Stats
       } = Q, Bytes, Count, AckRef, Acc) ->
   case queue:out(HeadItems) of
+    {empty, _} ->
+      Q1 = open_next_seg(Q),
+      pop(Q1, Bytes, Count, AckRef, Acc);
     {{value, ?DISK_CP_ITEM(_, Sz, _Item)}, _} when Sz > Bytes andalso Acc =/= [] ->
       %% taking the head item would cause exceeding size limit
       {Q, AckRef, lists:reverse(Acc)};
@@ -351,8 +353,8 @@ pop2(#{head_segno := ReaderSegno,
                              }
              },
       %% read the next segment in case current is drained
-      NewQ = case queue:is_empty(Rest) andalso ReaderSegno < WriterSegno of
-               true -> read_next_seg(Q1);
+      NewQ = case queue:is_empty(Rest) of
+               true -> open_next_seg(Q1);
                false -> Q1
              end,
       NewAckRef = {ReaderSegno, Id},
@@ -371,13 +373,29 @@ maybe_save_pending_acks(AckRef, #{config := Config}, Items) ->
       ok
   end.
 
-read_next_seg(#{config := #{dir := Dir} = Config,
-                head_segno := ReaderSegno,
-                w_cur := #{segno := WriterSegno, fd := Fd} = WCur0,
-                sizer := Sizer,
-                marshaller := Marshaller
-               } = Q) ->
-  NextSegno = ReaderSegno + 1,
+%% this function is only called when the in-mem segment is drained
+open_next_seg(#{head_segno := ReaderSegno,
+                w_cur := #{segno := WriterSegno}
+               } = Q) when ReaderSegno >= WriterSegno ->
+  %% this is the last segment, reached the end
+  Q;
+open_next_seg(Q0) ->
+  Q1 = do_open_next_seg(Q0),
+  #{in_mem := HeadItems} = Q1,
+  case queue:is_empty(HeadItems) of
+    true ->
+      open_next_seg(Q1);
+    false ->
+      Q1
+  end.
+
+do_open_next_seg(#{config := #{dir := Dir} = Config,
+                   head_segno := ReaderSegno,
+                   w_cur := #{segno := WriterSegno, fd := Fd} = WCur0,
+                   sizer := Sizer,
+                   marshaller := Marshaller
+                  } = Q) ->
+  NextSegno = ?NEXT_SEGNO(ReaderSegno),
   %% reader has caught up to latest segment
   case NextSegno =:= WriterSegno of
     true ->
