@@ -26,6 +26,7 @@
 -type marshaller() :: fun((item()) -> binary()).
 
 -type config() :: #{dir => dir(),
+                    clean_start => boolean(),
                     seg_bytes => bytes(),
                     mem_only => boolean(),
                     max_total_bytes => bytes(),
@@ -87,7 +88,8 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
   Sizer = get_sizer(Config),
   Marshaller = get_marshaller(Config),
   IsOffload = is_offload_mode(Config),
-  Q = case delete_consumed_and_list_rest(Dir) of
+  IsVolatile = is_volatile_mode(Config),
+  Q = case delete_consumed_and_list_rest(Dir, IsVolatile) of
         [] ->
           %% no old segments, start over from zero
           #{stats => #{bytes => 0, count => 0},
@@ -133,7 +135,7 @@ do_close(#{fd := Fd}) -> file:close(Fd).
 %% In case of offload mode, dump the unacked (and un-popped) on disk
 %% before close. this serves as a best-effort data loss protection
 maybe_dump_back_to_disk(#{config := Config} = Q) ->
-  case is_offload_mode(Config) of
+  case is_offload_mode(Config) andalso not is_volatile_mode(Config) of
     true  -> dump_back_to_disk(Q);
     false -> ok
   end.
@@ -421,7 +423,13 @@ do_open_next_seg(#{config := #{dir := Dir} = Config,
      w_cur := WCur
     }.
 
-delete_consumed_and_list_rest(Dir0) ->
+delete_consumed_and_list_rest(Dir0, _IsCleanStart = true) ->
+  Dir = unicode:characters_to_list(Dir0),
+  Segnos = lists:sort([parse_segno(N) || N <- filelib:wildcard("*."?SUFFIX, Dir)]),
+  lists:foreach(fun(Segno) -> ensure_deleted(filename(Dir, Segno)) end, Segnos),
+  ensure_deleted(commit_filename(Dir)),
+  [];
+delete_consumed_and_list_rest(Dir0, _IsCleanStart = false) ->
   Dir = unicode:characters_to_list(Dir0),
   Segnos0 = lists:sort([parse_segno(N) || N <- filelib:wildcard("*."?SUFFIX, Dir)]),
   {SegnosToDelete, Segnos} = find_segnos_to_delete(Dir, Segnos0),
@@ -665,7 +673,17 @@ get_marshaller(C) ->
   maps:get(marshaller, C, fun ?MODULE:default_marshaller/1).
 
 is_offload_mode(Config) when is_map(Config) ->
-  maps:get(offload, Config, false).
+  case maps:get(offload, Config, false) of
+      true -> true;
+      false -> false;
+      {true, volatile} -> true
+  end.
+
+is_volatile_mode(Config) when is_map(Config) ->
+  case maps:get(offload, Config, false) of
+      {true, volatile} -> true;
+      _ -> false
+  end.
 
 default_sizer(I) when is_binary(I) -> erlang:size(I).
 

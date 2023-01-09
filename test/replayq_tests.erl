@@ -30,6 +30,20 @@ reopen_test() ->
   ?assertEqual(10, replayq:bytes(Q2)),
   ok = cleanup(Dir).
 
+volatile_test() ->
+  Dir = ?DIR,
+  Config = #{dir => Dir, seg_bytes => 100},
+  Q0 = replayq:open(Config),
+  Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
+  ok = replayq:close(Q1),
+  Q2 = replayq:open(Config#{offload => {true, volatile}}),
+  ?assertEqual(0, replayq:count(Q2)),
+  ?assertEqual(0, replayq:bytes(Q2)),
+  {Q3, _QAckRef, Items} = replayq:pop(Q2, #{count_limit => 10}),
+  ?assertEqual([], Items),
+  ok = replayq:close(Q3),
+  ok = cleanup(Dir).
+
 %% when popping from in-mem segment, the segment size stats may overflow
 %% but not consuming as much memory
 offload_in_mem_seg_overflow_test() ->
