@@ -423,13 +423,13 @@ do_open_next_seg(#{config := #{dir := Dir} = Config,
      w_cur := WCur
     }.
 
-delete_consumed_and_list_rest(Dir0, _IsCleanStart = true) ->
+delete_consumed_and_list_rest(Dir0, _IsVolatile = true) ->
   Dir = unicode:characters_to_list(Dir0),
   Segnos = lists:sort([parse_segno(N) || N <- filelib:wildcard("*."?SUFFIX, Dir)]),
   lists:foreach(fun(Segno) -> ensure_deleted(filename(Dir, Segno)) end, Segnos),
   ensure_deleted(commit_filename(Dir)),
   [];
-delete_consumed_and_list_rest(Dir0, _IsCleanStart = false) ->
+delete_consumed_and_list_rest(Dir0, _IsVolatile = false) ->
   Dir = unicode:characters_to_list(Dir0),
   Segnos0 = lists:sort([parse_segno(N) || N <- filelib:wildcard("*."?SUFFIX, Dir)]),
   {SegnosToDelete, Segnos} = find_segnos_to_delete(Dir, Segnos0),
