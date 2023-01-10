@@ -49,8 +49,9 @@ ok = replayq:ack(Q2, AckRef).
 In offload mode, the disk queue is only used to offload queue tail segments.
 Add `offload => true` to `Config` for `replayq:open/1`.
 
-### Clean start
+#### Volatile mode
 
-Adding `clean_start => true` to the `Config` for `replayq:open/1` will
-make it unconditionally clear any previous segments and commit file in
-the given work directory.
+Using `offload => {true, volatile}` in the `Config` for
+`replayq:open/1` will make it unconditionally clear any previous
+segments and commit file in the given work directory.  Also, it will
+not dump in-memory data back to the disk when closing.
