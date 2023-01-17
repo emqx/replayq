@@ -26,11 +26,10 @@
 -type marshaller() :: fun((item()) -> binary()).
 
 -type config() :: #{dir => dir(),
-                    clean_start => boolean(),
                     seg_bytes => bytes(),
                     mem_only => boolean(),
                     max_total_bytes => bytes(),
-                    offload => boolean(),
+                    offload => boolean() | {true, volatile},
                     sizer => sizer(),
                     marshaller => marshaller()
                    }.
