@@ -402,6 +402,35 @@ is_in_mem_test_() ->
                    end}
   ].
 
+stop_before_test_() ->
+  [{"mem queue",
+    fun() -> stop_before_test(#{mem_only => true}) end},
+   {"disk queue",
+    fun() -> stop_before_test(#{dir => ?DIR, seg_bytes => 100}) end}].
+
+
+stop_before_test(Config) ->
+    Q0 = replayq:open(Config),
+    Q1 = replayq:append(Q0, [<<"1">>, <<"2">>, <<"3">>, <<"4">>, <<"5">>]),
+    StopBeforeFun =
+      fun(_Item, #{stop_ctr := 3}) ->
+           true;
+         (_Item, #{stop_ctr := Cnt}) ->
+           #{stop_ctr => Cnt + 1}
+      end,
+    {Q2, AckRef, Items} =
+      replayq:pop(Q1,
+                  #{
+                    count_limit => 100,
+                    bytes_limit => 10000000,
+                    stop_before => StopBeforeFun,
+                    stop_before_input_accumulator => #{stop_ctr => 0}
+                   }),
+    ok = replayq:ack(Q2, AckRef),
+    ?assertEqual([<<"1">>, <<"2">>, <<"3">>], Items),
+    ?assertEqual(2, replayq:count(Q2)),
+    ok = replayq:close(Q2).
+
 %% helpers ===========================================================
 
 cleanup(Dir) ->
