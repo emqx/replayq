@@ -7,7 +7,10 @@
 -export([do_read_items/2]).
 
 %% internal exports for beam reload
--export([committer_loop/2, default_sizer/1, default_marshaller/1]).
+-export([committer_loop/2,
+         default_sizer/1,
+         default_marshaller/1,
+         default_stop_before_func/2]).
 
 -export_type([config/0, q/0, ack_ref/0, sizer/0, marshaller/0]).
 
@@ -241,7 +244,7 @@ pop(Q, Opts) ->
   Bytes = maps:get(bytes_limit, Opts, ?DEFAULT_POP_BYTES_LIMIT),
   Count = maps:get(count_limit, Opts, ?DEFAULT_POP_COUNT_LIMIT),
   {StopFun, StopFunAcc} =
-    maps:get(stop_before, Opts, {fun default_stop_before_func/2, none}),
+    maps:get(stop_before, Opts, {fun ?MODULE:default_stop_before_func/2, none}),
   true = (Count > 0),
   pop(Q, Bytes, Count, ?NOTHING_TO_ACK, [], StopFun, StopFunAcc).
 
