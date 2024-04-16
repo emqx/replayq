@@ -7,7 +7,10 @@
 -export([do_read_items/2]).
 
 %% internal exports for beam reload
--export([committer_loop/2, default_sizer/1, default_marshaller/1]).
+-export([committer_loop/2,
+         default_sizer/1,
+         default_marshaller/1,
+         default_stop_before_func/2]).
 
 -export_type([config/0, q/0, ack_ref/0, sizer/0, marshaller/0]).
 
@@ -24,6 +27,10 @@
 -type ack_ref() :: ?NOTHING_TO_ACK | {segno(), ID :: pos_integer()}.
 -type sizer() :: fun((item()) -> bytes()).
 -type marshaller() :: fun((item()) -> binary()).
+-type stop_before_initial_state() :: term().
+-type next_stop_before_state() :: term().
+-type stop_before_func() ::
+    fun((item(), stop_before_initial_state()) -> true |  next_stop_before_state()).
 
 -type config() :: #{dir => dir(),
                     seg_bytes => bytes(),
@@ -226,13 +233,20 @@ append(#{config := #{seg_bytes := BytesLimit, dir := Dir} = Config,
 
 %% @doc pop out at least one item from the queue.
 %% volume limited by `bytes_limit' and `count_limit'.
--spec pop(q(), #{bytes_limit => bytes(), count_limit => count()}) ->
+-spec pop(q(),
+          #{
+            bytes_limit => bytes(),
+            count_limit => count(),
+            stop_before => {stop_before_func(), stop_before_initial_state()}
+           }) ->
         {q(), ack_ref(), [item()]}.
 pop(Q, Opts) ->
   Bytes = maps:get(bytes_limit, Opts, ?DEFAULT_POP_BYTES_LIMIT),
   Count = maps:get(count_limit, Opts, ?DEFAULT_POP_COUNT_LIMIT),
+  {StopFun, StopFunAcc} =
+    maps:get(stop_before, Opts, {fun ?MODULE:default_stop_before_func/2, none}),
   true = (Count > 0),
-  pop(Q, Bytes, Count, ?NOTHING_TO_ACK, []).
+  pop(Q, Bytes, Count, ?NOTHING_TO_ACK, [], StopFun, StopFunAcc).
 
 %% @doc peek the queue front item.
 -spec peek(q()) -> empty | item().
@@ -290,6 +304,9 @@ is_mem_only(_) ->
 
 %% internals =========================================================
 
+default_stop_before_func(_Item, _State) ->
+  none.
+
 transform(Id, Items, Sizer) ->
   transform(Id, Items, Sizer, 0, 0, []).
 
@@ -307,59 +324,81 @@ transform(Id, [Item0 | Rest], Sizer, Count, Bytes, Acc) ->
 append_in_mem([], Q) -> Q;
 append_in_mem([Item | Rest], Q) -> append_in_mem(Rest, queue:in(Item, Q)).
 
-pop(Q, _Bytes, 0, AckRef, Acc) ->
+pop(Q, _Bytes, 0, AckRef, Acc, _StopFun, _StopFunAcc) ->
   Result = lists:reverse(Acc),
   ok = maybe_save_pending_acks(AckRef, Q, Result),
   {Q, AckRef, Result};
-pop(#{config := Cfg} = Q, Bytes, Count, AckRef, Acc) ->
+pop(#{config := Cfg} = Q, Bytes, Count, AckRef, Acc, StopFun, StopFunAcc) ->
   case is_empty(Q) of
     true ->
       {Q, AckRef, lists:reverse(Acc)};
     false when Cfg =:= mem_only ->
-      pop_mem(Q, Bytes, Count, Acc);
+      pop_mem(Q, Bytes, Count, Acc, StopFun, StopFunAcc);
     false ->
-      pop2(Q, Bytes, Count, AckRef, Acc)
+      pop2(Q, Bytes, Count, AckRef, Acc, StopFun, StopFunAcc)
   end.
 
 pop_mem(#{in_mem := InMem,
           stats := #{count := TotalCount, bytes := TotalBytes} = Stats
-         } = Q, Bytes, Count, Acc) ->
+         } = Q, Bytes, Count, Acc, StopFun, StopFunAcc) ->
   case queue:out(InMem) of
     {{value, ?MEM_ONLY_ITEM(Sz, _Item)}, _} when Sz > Bytes andalso Acc =/= [] ->
       {Q, ?NOTHING_TO_ACK, lists:reverse(Acc)};
     {{value, ?MEM_ONLY_ITEM(Sz, Item)}, Rest} ->
-      NewQ = Q#{in_mem := Rest,
-                stats := Stats#{count := TotalCount - 1,
-                                bytes := TotalBytes - Sz
-                               }
-               },
-      pop(NewQ, Bytes - Sz, Count - 1, ?NOTHING_TO_ACK, [Item | Acc])
+      case StopFun(Item, StopFunAcc) of
+        true ->
+          {Q, ?NOTHING_TO_ACK, lists:reverse(Acc)};
+        NewStopFunAcc ->
+          NewQ = Q#{in_mem := Rest,
+                    stats := Stats#{count := TotalCount - 1,
+                                    bytes := TotalBytes - Sz
+                                   }
+                   },
+          pop(NewQ,
+              Bytes - Sz,
+              Count - 1,
+              ?NOTHING_TO_ACK,
+              [Item | Acc],
+              StopFun,
+              NewStopFunAcc)
+      end
   end.
 
 pop2(#{head_segno := ReaderSegno,
        in_mem := HeadItems,
        stats := #{count := TotalCount, bytes := TotalBytes} = Stats
-      } = Q, Bytes, Count, AckRef, Acc) ->
+      } = Q, Bytes, Count, AckRef, Acc, StopFun, StopFunAcc) ->
   case queue:out(HeadItems) of
     {empty, _} ->
       Q1 = open_next_seg(Q),
-      pop(Q1, Bytes, Count, AckRef, Acc);
+      pop(Q1, Bytes, Count, AckRef, Acc, StopFun, StopFunAcc);
     {{value, ?DISK_CP_ITEM(_, Sz, _Item)}, _} when Sz > Bytes andalso Acc =/= [] ->
       %% taking the head item would cause exceeding size limit
       {Q, AckRef, lists:reverse(Acc)};
-    {{value, ?DISK_CP_ITEM(Id, Sz, Item)}, Rest} ->
-      Q1 = Q#{in_mem := Rest,
-              stats := Stats#{count := TotalCount - 1,
-                              bytes := TotalBytes - Sz
-                             }
-             },
-      %% read the next segment in case current is drained
-      NewQ = case queue:is_empty(Rest) of
-               true -> open_next_seg(Q1);
-               false -> Q1
-             end,
-      NewAckRef = {ReaderSegno, Id},
-      pop(NewQ, Bytes - Sz, Count - 1, NewAckRef, [Item | Acc])
+      {{value, ?DISK_CP_ITEM(Id, Sz, Item)}, Rest} ->
+        case StopFun(Item, StopFunAcc) of
+          true ->
+            {Q, AckRef, lists:reverse(Acc)};
+          NewStopFunAcc ->
+            Q1 = Q#{in_mem := Rest,
+                    stats := Stats#{count := TotalCount - 1,
+                                    bytes := TotalBytes - Sz
+                                   }
+                   },
+            %% read the next segment in case current is drained
+            NewQ = case queue:is_empty(Rest) of
+                     true -> open_next_seg(Q1);
+                     false -> Q1
+                   end,
+            NewAckRef = {ReaderSegno, Id},
+            pop(NewQ,
+                Bytes - Sz,
+                Count - 1,
+                NewAckRef,
+                [Item | Acc],
+                StopFun,
+                NewStopFunAcc)
+        end
   end.
 
 %% due to backward compatibility reasons for the ack api

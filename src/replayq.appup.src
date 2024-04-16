@@ -1,5 +1,5 @@
 %% -*- mode: erlang -*-
-{"0.3.7",
+{"0.3.8",
   [ {<<".*">>, [ {load_module, replayq, brutal_purge, soft_purge, []} ]} ],
   [ {<<".*">>, [ {load_module, replayq, brutal_purge, soft_purge, []} ]} ]
 }.
