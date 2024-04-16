@@ -404,10 +404,24 @@ is_in_mem_test_() ->
 
 stop_before_test_() ->
   [{"mem queue",
-    fun() -> stop_before_test(#{mem_only => true}) end},
+    fun() ->
+            Config = #{mem_only => true},
+            stop_before_test(Config),
+            stop_before_readme_example_test(Config)
+    end},
    {"disk queue",
-    fun() -> stop_before_test(#{dir => ?DIR, seg_bytes => 100}) end}].
-
+    fun() ->
+            Config1 = #{
+                       dir => ?DIR,
+                       seg_bytes => 100
+                      },
+            stop_before_test(Config1),
+            Config2 = #{
+                       dir => filename:join([?DIR, "example"]),
+                       seg_bytes => 100
+                      },
+            stop_before_readme_example_test(Config2)
+    end}].
 
 stop_before_test(Config) ->
     Q0 = replayq:open(Config),
@@ -423,13 +437,54 @@ stop_before_test(Config) ->
                   #{
                     count_limit => 100,
                     bytes_limit => 10000000,
-                    stop_before => StopBeforeFun,
-                    stop_before_input_accumulator => #{stop_ctr => 0}
+                    stop_before => {StopBeforeFun, #{stop_ctr => 0}}
                    }),
     ok = replayq:ack(Q2, AckRef),
     ?assertEqual([<<"1">>, <<"2">>, <<"3">>], Items),
     ?assertEqual(2, replayq:count(Q2)),
     ok = replayq:close(Q2).
+
+%% Test that the example in the readme file works
+stop_before_readme_example_test(Config) ->
+    Q0 = replayq:open(Config),
+    Q1 = replayq:append(Q0,
+                        [
+                         <<"type1">>,
+                         <<"type1">>,
+                         <<"type2">>,
+                         <<"type2">>,
+                         <<"type2">>,
+                         <<"type3">>
+                        ]),
+    StopBeforeFunc =
+    fun(Item, #{current_type := none}) ->
+            #{current_type => Item};
+       (Item, #{current_type := Item}) ->
+            %% Item and current_type are the same
+            #{current_type => Item};
+       (_Item, #{current_type := _OtherType}) ->
+            %% Return true to stop collecting items before the current item
+            true
+    end,
+    StopBeforeInitialState = #{current_type => none},
+    StopBefore = {StopBeforeFunc, StopBeforeInitialState},
+    %% We will stop because the stop_before function returns true
+    {Q2, AckRef1, [<<"type1">>, <<"type1">>]} =
+        replayq:pop(Q1, #{stop_before => StopBefore, count_limit => 10}),
+    ok = replayq:ack(Q2, AckRef1),
+    %% We will stop because of the count_limit
+    {Q3, AckRef2, [<<"type2">>]} =
+        replayq:pop(Q2, #{stop_before => StopBefore, count_limit => 1}),
+    ok = replayq:ack(Q3, AckRef2),
+    %% We will stop because the stop_before function returns true
+    {Q4, AckRef3, [<<"type2">>, <<"type2">>]} =
+        replayq:pop(Q3, #{stop_before => StopBefore, count_limit => 10}),
+    ok = replayq:ack(Q4, AckRef3),
+    %% We will stop because the queue gets empty
+    {Q5, AckRef4, [<<"type3">>]} =
+        replayq:pop(Q4, #{stop_before => StopBefore, count_limit => 10}),
+    ok = replayq:ack(Q5, AckRef4),
+    ok = replayq:close(Q5).
 
 %% helpers ===========================================================
 

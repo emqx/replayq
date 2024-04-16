@@ -24,8 +24,10 @@
 -type ack_ref() :: ?NOTHING_TO_ACK | {segno(), ID :: pos_integer()}.
 -type sizer() :: fun((item()) -> bytes()).
 -type marshaller() :: fun((item()) -> binary()).
--type accumulator() :: term().
--type stop_function() :: fun((item(), accumulator()) -> true | accumulator()).
+-type stop_before_initial_state() :: term().
+-type next_stop_before_state() :: term().
+-type stop_before_func() ::
+    fun((item(), stop_before_initial_state()) -> true |  next_stop_before_state()).
 
 -type config() :: #{dir => dir(),
                     seg_bytes => bytes(),
@@ -232,15 +234,14 @@ append(#{config := #{seg_bytes := BytesLimit, dir := Dir} = Config,
           #{
             bytes_limit => bytes(),
             count_limit => count(),
-            stop_before => stop_function(),
-            stop_before_input_accumulator => term()
+            stop_before => {stop_before_func(), stop_before_initial_state()}
            }) ->
         {q(), ack_ref(), [item()]}.
 pop(Q, Opts) ->
   Bytes = maps:get(bytes_limit, Opts, ?DEFAULT_POP_BYTES_LIMIT),
   Count = maps:get(count_limit, Opts, ?DEFAULT_POP_COUNT_LIMIT),
-  StopFun = maps:get(stop_before, Opts, fun default_stop_function/2),
-  StopFunAcc = maps:get(stop_before_input_accumulator, Opts, #{}),
+  {StopFun, StopFunAcc} =
+    maps:get(stop_before, Opts, {fun default_stop_before_func/2, none}),
   true = (Count > 0),
   pop(Q, Bytes, Count, ?NOTHING_TO_ACK, [], StopFun, StopFunAcc).
 
@@ -300,8 +301,8 @@ is_mem_only(_) ->
 
 %% internals =========================================================
 
-default_stop_function(_Item, Acc) ->
-  Acc.
+default_stop_before_func(_Item, _State) ->
+  none.
 
 transform(Id, Items, Sizer) ->
   transform(Id, Items, Sizer, 0, 0, []).
