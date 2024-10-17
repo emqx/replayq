@@ -378,7 +378,7 @@ test_corrupted_segment(BadBytes) ->
 
 comitter_crash_test() ->
   Dir = ?DIR,
-  ComitterName = binary_to_atom(iolist_to_binary(filename:join([Dir, committer])), utf8),
+  ComitterName = replayq:committer_process_name(Dir),
   Config = #{dir => Dir, seg_bytes => 1000},
   _ = replayq:open(Config),
   erlang:process_flag(trap_exit, true),
@@ -387,6 +387,17 @@ comitter_crash_test() ->
     {'EXIT', _Pid, {replayq_committer_unkown_msg, <<"foo">>}} ->
       ok
   end.
+
+%% Checks that our spawned committer can register a name for itself when using filepaths
+%% larger than 255 bytes.
+huge_filepath_test() ->
+    Dir0 = ?DIR,
+    Dir = filename:join(Dir0, binary:copy(<<"a">>, 255)),
+    Config = #{dir => Dir, seg_bytes => 1000},
+    _ = replayq:open(Config),
+    CommitterName = replayq:committer_process_name(Dir),
+    ?assert(is_process_alive(whereis(CommitterName))),
+    ok.
 
 is_in_mem_test_() ->
   [ {"mem queue", fun() ->

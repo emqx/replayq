@@ -12,6 +12,10 @@
          default_marshaller/1,
          default_stop_before_func/2]).
 
+-ifdef(TEST).
+-export([committer_process_name/1]).
+-endif.
+
 -export_type([config/0, q/0, ack_ref/0, sizer/0, marshaller/0]).
 
 -define(NOTHING_TO_ACK, nothing_to_ack).
@@ -515,12 +519,16 @@ ensure_deleted(Filename) ->
 %% The committer writes consumer's acked segmeng number + item ID
 %% to a file. The file is only read at start/restart.
 spawn_committer(ReaderSegno, Dir) ->
-  Name = iolist_to_binary(filename:join([Dir, committer])),
   %% register a name to avoid having two committers spawned for the same dir
-  RegName = binary_to_atom(Name, utf8),
+  RegName = committer_process_name(Dir),
   Pid = erlang:spawn_link(fun() -> committer_loop(ReaderSegno, Dir) end),
   true = erlang:register(RegName, Pid),
   Pid.
+
+committer_process_name(Dir) ->
+  Name = iolist_to_binary(filename:join([Dir, committer])),
+  NameBin = binary:encode_hex(erlang:md5(Name)),
+  binary_to_atom(NameBin, utf8).
 
 committer_loop(ReaderSegno, Dir) ->
   receive
