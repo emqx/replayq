@@ -1,5 +1,5 @@
 %% -*- mode: erlang -*-
-{"0.3.8",
+{VSN,
   [ {<<".*">>, [ {load_module, replayq, brutal_purge, soft_purge, []} ]} ],
   [ {<<".*">>, [ {load_module, replayq, brutal_purge, soft_purge, []} ]} ]
 }.
