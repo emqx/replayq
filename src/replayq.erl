@@ -12,10 +12,6 @@
          default_marshaller/1,
          default_stop_before_func/2]).
 
--ifdef(TEST).
--export([committer_process_name/1]).
--endif.
-
 -export_type([config/0, q/0, ack_ref/0, sizer/0, marshaller/0]).
 
 -define(NOTHING_TO_ACK, nothing_to_ack).
@@ -94,7 +90,8 @@ open(#{mem_only := true} = C) ->
     max_total_bytes => maps:get(max_total_bytes, C, ?DEFAULT_REPLAYQ_LIMIT)
    };
 open(#{dir := Dir, seg_bytes := _} = Config) ->
-  ok = filelib:ensure_dir(filename:join(Dir, "foo")),
+  ok = filelib:ensure_path(Dir),
+  ok = replayq_registry:register_committer(Dir, self()),
   Sizer = get_sizer(Config),
   Marshaller = get_marshaller(Config),
   IsOffload = is_offload_mode(Config),
@@ -137,7 +134,9 @@ close(#{w_cur := W_Cur, committer := Pid} = Q) ->
       ok
   end,
   ok = maybe_dump_back_to_disk(Q),
-  do_close(W_Cur).
+  Res = do_close(W_Cur),
+  ok = replayq_registry:deregister_committer(self()),
+  Res.
 
 do_close(#{fd := ?NO_FD}) -> ok;
 do_close(#{fd := Fd}) -> file:close(Fd).
@@ -519,16 +518,9 @@ ensure_deleted(Filename) ->
 %% The committer writes consumer's acked segmeng number + item ID
 %% to a file. The file is only read at start/restart.
 spawn_committer(ReaderSegno, Dir) ->
-  %% register a name to avoid having two committers spawned for the same dir
-  RegName = committer_process_name(Dir),
-  Pid = erlang:spawn_link(fun() -> committer_loop(ReaderSegno, Dir) end),
-  true = erlang:register(RegName, Pid),
-  Pid.
-
-committer_process_name(Dir) ->
-  Name = iolist_to_binary(filename:join([Dir, committer])),
-  NameBin = binary:encode_hex(erlang:md5(Name)),
-  binary_to_atom(NameBin, utf8).
+  erlang:spawn_link(fun() ->
+    committer_loop(ReaderSegno, Dir)
+  end).
 
 committer_loop(ReaderSegno, Dir) ->
   receive

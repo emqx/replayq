@@ -7,6 +7,7 @@
 
 %% the very first run
 init_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 100},
   Q1 = replayq:open(Config),
@@ -20,6 +21,7 @@ init_test() ->
   ok = cleanup(Dir).
 
 reopen_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 100},
   Q0 = replayq:open(Config),
@@ -47,6 +49,7 @@ volatile_test() ->
 %% when popping from in-mem segment, the segment size stats may overflow
 %% but not consuming as much memory
 offload_in_mem_seg_overflow_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 11, offload => true},
   Q0 = replayq:open(Config),
@@ -62,6 +65,7 @@ offload_in_mem_seg_overflow_test() ->
   ok = cleanup(Dir).
 
 offload_file_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 10, offload => true},
   Q0 = replayq:open(Config),
@@ -89,6 +93,7 @@ offload_file_test() ->
   ok = cleanup(Dir).
 
 offload_reopen_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 100, offload => true},
   Q0 = replayq:open(Config),
@@ -128,11 +133,13 @@ reopen_v0_test() ->
   ok = cleanup(Dir).
 
 append_pop_disk_default_marshaller_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 1},
   test_append_pop_disk(Config).
 
 append_pop_disk_my_marshaller_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
   Config = #{dir => Dir,
              seg_bytes => 1,
@@ -144,6 +151,7 @@ append_pop_disk_my_marshaller_test() ->
   test_append_pop_disk(Config).
 
 test_append_pop_disk(#{dir := Dir} = Config) ->
+  {ok, _} = application:ensure_all_started(replayq),
   Q0 = replayq:open(Config),
   Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
   Q2 = replayq:append(Q1, [<<"item3">>]),
@@ -170,10 +178,12 @@ test_append_pop_disk(#{dir := Dir} = Config) ->
   ok = cleanup(Dir).
 
 append_pop_mem_default_marshaller_test_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Config = #{mem_only => true},
   test_append_pop_mem(Config).
 
 append_pop_mem_my_marshaller_test_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Config = #{mem_only => true,
              sizer => fun(Item) -> size(Item) end,
              marshaller => fun(<<"mmp", I/binary>>) -> I;
@@ -202,6 +212,7 @@ test_append_pop_mem(Config) ->
   ok = replayq:close(Q5).
 
 append_max_total_bytes_mem_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Config = #{mem_only => true,
              sizer => fun(Item) -> size(Item) end,
              marshaller => fun(<<"mmp", I/binary>>) -> I;
@@ -213,6 +224,7 @@ append_max_total_bytes_mem_test() ->
   ok.
 
 append_max_total_bytes_disk_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
   Config = #{dir => Dir,
              seg_bytes => 1,
@@ -226,6 +238,7 @@ append_max_total_bytes_disk_test() ->
   ok = cleanup(Dir).
 
 test_append_max_total_bytes(Config) ->
+  {ok, _} = application:ensure_all_started(replayq),
   Q0 = replayq:open(Config),
   ?assertEqual(-10, replayq:overflow(Q0)),
   Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>, <<"item3">>, <<"item4">>]),
@@ -235,12 +248,14 @@ test_append_max_total_bytes(Config) ->
   ok = replayq:close(Q2).
 
 pop_limit_disk_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 1},
   ok = test_pop_limit(Config),
   ok = cleanup(Dir).
 
 pop_limit_mem_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Config = #{mem_only => true},
   ok = test_pop_limit(Config).
 
@@ -257,6 +272,7 @@ test_pop_limit(Config) ->
   ok = replayq:close(Q4).
 
 commit_in_the_middle_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 1000},
   Q0 = replayq:open(Config),
@@ -279,6 +295,7 @@ commit_in_the_middle_test() ->
   ok = cleanup(Dir).
 
 first_segment_corrupted_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
   SegBytes = 10,
   Config = #{dir => Dir, seg_bytes => SegBytes},
@@ -300,6 +317,7 @@ first_segment_corrupted_test() ->
   ok = cleanup(Dir).
 
 second_segment_corrupted_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
   SegBytes = 10,
   Config = #{dir => Dir, seg_bytes => SegBytes},
@@ -322,6 +340,7 @@ second_segment_corrupted_test() ->
   ok = cleanup(Dir).
 
 last_segment_corrupted_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
   SegBytes = 10,
   Config = #{dir => Dir, seg_bytes => SegBytes},
@@ -351,6 +370,7 @@ last_segment_corrupted_test() ->
   ok = cleanup(Dir).
 
 corrupted_segment_test_() ->
+  {ok, _} = application:ensure_all_started(replayq),
   [{"ramdom", fun() -> test_corrupted_segment(<<"foo">>) end},
    {"v0-bad-crc", fun() -> test_corrupted_segment(<<0:8, 0:32, 1:32, 1:8>>) end},
    {"v0-zero-crc", fun() -> test_corrupted_segment(<<0:8, 0:32, 0:32, "randomtail">>) end},
@@ -377,12 +397,12 @@ test_corrupted_segment(BadBytes) ->
   ok = cleanup(Dir).
 
 comitter_crash_test() ->
+  {ok, _} = application:ensure_all_started(replayq),
   Dir = ?DIR,
-  ComitterName = replayq:committer_process_name(Dir),
   Config = #{dir => Dir, seg_bytes => 1000},
-  _ = replayq:open(Config),
+  #{committer := Committer} = replayq:open(Config),
   erlang:process_flag(trap_exit, true),
-  ComitterName ! <<"foo">>,
+  Committer ! <<"foo">>,
   receive
     {'EXIT', _Pid, {replayq_committer_unkown_msg, <<"foo">>}} ->
       ok
@@ -391,15 +411,32 @@ comitter_crash_test() ->
 %% Checks that our spawned committer can register a name for itself when using filepaths
 %% larger than 255 bytes.
 huge_filepath_test() ->
+    {ok, _} = application:ensure_all_started(replayq),
     Dir0 = ?DIR,
     Dir = filename:join(Dir0, binary:copy(<<"a">>, 255)),
     Config = #{dir => Dir, seg_bytes => 1000},
-    _ = replayq:open(Config),
-    CommitterName = replayq:committer_process_name(Dir),
-    ?assert(is_process_alive(whereis(CommitterName))),
+    Q = #{committer := Committer} = replayq:open(Config),
+    ?assert(is_process_alive(Committer)),
+    replayq:close(Q),
+    ok.
+
+%% Checks that we don't allow having the same directory open by multiple replayqs.
+same_directory_committer_clash_test() ->
+    {ok, _} = application:ensure_all_started(replayq),
+    Dir = ?DIR,
+    Config = #{dir => Dir, seg_bytes => 1000},
+    Q1 = replayq:open(Config),
+    try replayq:open(Config) of
+        Q2 -> error({"should not allow opening a second replayq", Q2})
+    catch
+        error:{badmatch, {error, already_registered}} ->
+            ok
+    end,
+    replayq:close(Q1),
     ok.
 
 is_in_mem_test_() ->
+  {ok, _} = application:ensure_all_started(replayq),
   [ {"mem queue", fun() ->
                       Q = replayq:open(#{mem_only => true}),
                       true = replayq:is_mem_only(Q),
@@ -414,6 +451,7 @@ is_in_mem_test_() ->
   ].
 
 stop_before_test_() ->
+  {ok, _} = application:ensure_all_started(replayq),
   [{"mem queue",
     fun() ->
             Config = #{mem_only => true},
@@ -435,6 +473,7 @@ stop_before_test_() ->
     end}].
 
 stop_before_test(Config) ->
+  {ok, _} = application:ensure_all_started(replayq),
     Q0 = replayq:open(Config),
     Q1 = replayq:append(Q0, [<<"1">>, <<"2">>, <<"3">>, <<"4">>, <<"5">>]),
     StopBeforeFun =
@@ -457,6 +496,7 @@ stop_before_test(Config) ->
 
 %% Test that the example in the readme file works
 stop_before_readme_example_test(Config) ->
+    {ok, _} = application:ensure_all_started(replayq),
     Q0 = replayq:open(Config),
     Q1 = replayq:append(Q0,
                         [

@@ -1,12 +1,13 @@
 {application, replayq,
  [{description, "A Disk Queue for Log Replay in Erlang"},
   {vsn, "git"},
-  {registered, []},
+  {registered, [replayq_sup, replayq_registry]},
   {applications,
    [kernel,
     stdlib
    ]},
   {env,[]},
+  {mod, {replayq_app, []}},
   {modules, []},
   {licenses, ["Apache 2.0"]},
   {links, [{"GitHub", "https://github.com/emqx/replayq"}]}
