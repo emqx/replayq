@@ -33,7 +33,8 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-register_committer(Dir, Pid) ->
+register_committer(Dir0, Pid) ->
+    Dir = iolist_to_binary(Dir0),
     gen_server:call(?MODULE, #register_committer{dir = Dir, pid = Pid}, infinity).
 
 deregister_committer(Pid) ->
