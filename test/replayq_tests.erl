@@ -388,6 +388,28 @@ is_in_mem_test_() ->
                    end}
   ].
 
+corrupted_commit_test() ->
+  Dir = ?DIR,
+  Config = #{dir => Dir, seg_bytes => 1000},
+  Q0 = replayq:open(Config),
+  Q1 = replayq:append(Q0, [<<"item1">>]),
+  {Q2, AckRef, _} = replayq:pop(Q1, #{count_limit => 3}),
+  ok = replayq:ack_sync(Q2, AckRef),
+  ok = replayq:close(Q2),
+  CommitFile = filename:join(Dir, "COMMIT"),
+  ?assertMatch({ok, [_]}, file:consult(CommitFile)),
+
+  ok = file:write_file(CommitFile, <<>>),
+  %% assert no crash
+  Q3 = replayq:open(Config),
+  ok = replayq:close(Q3),
+
+  ok = file:write_file(CommitFile, <<"bad-erlang-term">>),
+  %% assert no crash
+  Q4 = replayq:open(Config),
+  ok = replayq:close(Q4),
+  ok = cleanup(Dir).
+
 %% helpers ===========================================================
 
 cleanup(Dir) ->
