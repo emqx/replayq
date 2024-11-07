@@ -43,4 +43,4 @@ coveralls:
 
 .PHONY: hex-publish
 hex-publish:
-	@rebar3 hex publish
+	@rebar3 hex publish --repo=hexpm
