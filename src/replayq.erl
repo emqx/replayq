@@ -573,8 +573,20 @@ get_commit_hist(Dir) ->
   CommitFile = commit_filename(Dir),
   case filelib:is_regular(CommitFile) of
     true ->
-      {ok, [#{segno := Segno, id := Id}]} = file:consult(CommitFile),
-      {Segno, Id};
+      case file:consult(CommitFile) of
+        {ok, [#{segno := Segno, id := Id}]} ->
+          {Segno, Id};
+        {ok, BadContent} ->
+          %% ignore empty file
+          %% sometimes (e.g. IOPS limited) do_commit (write to .tmp then rename) may fail
+          %% to write but succeed in rename.
+          %% ignoring COMMIT file leads to message receliver, so warning level
+          logger:log(warning, "Ignored corrupted replayq COMMIT file: ~ts, due to unexpected content: ~0p", [CommitFile, BadContent]),
+          ?NO_COMMIT_HIST;
+        {error, Reason} ->
+          logger:log(error, "Ignored corrupted replayq COMMIT file ~ts, reason: ~0p", [CommitFile, Reason]),
+          ?NO_COMMIT_HIST
+      end;
     false ->
       ?NO_COMMIT_HIST
   end.
@@ -632,8 +644,7 @@ do_read_items(Dir, Segno) ->
     {Items, <<>>} ->
       Items;
     {Items, Corrupted} ->
-      error_logger:error_msg("corrupted replayq log: ~s, skipped ~p bytes",
-                             [Filename, size(Corrupted)]),
+      logger:log(error, "corrupted replayq log: ~s, skipped ~p bytes", [Filename, size(Corrupted)]),
       Items
   end.
 
