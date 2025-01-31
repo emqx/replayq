@@ -22,6 +22,7 @@
 -type count() :: non_neg_integer().
 -type id() :: count().
 -type bytes() :: non_neg_integer().
+-type bytes_limit() :: bytes() | {at_most | at_least, bytes()}.
 -type filename() :: file:filename_all().
 -type dir() :: filename().
 -type ack_ref() :: ?NOTHING_TO_ACK | {segno(), ID :: pos_integer()}.
@@ -238,7 +239,7 @@ append(#{config := #{seg_bytes := BytesLimit, dir := Dir} = Config,
 %% volume limited by `bytes_limit' and `count_limit'.
 -spec pop(q(),
           #{
-            bytes_limit => bytes(),
+            bytes_limit => bytes_limit(),
             count_limit => count(),
             stop_before => {stop_before_func(), stop_before_initial_state()}
            }) ->
