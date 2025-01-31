@@ -559,6 +559,43 @@ corrupted_commit_test() ->
   ok = replayq:close(Q4),
   ok = cleanup(Dir).
 
+pop_at_least_bytes_mem_test() ->
+  Config = #{
+    mem_only => true,
+    seg_bytes => 1000,
+    sizer => fun(Item) -> size(Item) end
+  },
+  test_pop_at_least_bytes(Config).
+
+pop_at_least_bytes_disk_test() ->
+  Dir = ?DIR,
+  Config = #{
+    dir => Dir,
+    seg_bytes => 1000,
+    sizer => fun(Item) -> size(Item) end
+  },
+  test_pop_at_least_bytes(Config),
+  ok = cleanup(Dir).
+
+test_pop_at_least_bytes(Config) ->
+  Q0 = replayq:open(Config),
+  %% Two 5 bytes elements
+  Item1 = <<"12345">>,
+  Item2 = <<"67890">>,
+  Q1 = replayq:append(Q0, [Item1, Item2]),
+  ItemSize = 5,
+  ?assertEqual(ItemSize * 2, replayq:bytes(Q1)),
+  %% Default behavior: we pop _at most_ N bytes, and return at least 1 item, if any.
+  %% Asking for less bytes than the 2 elements should yield singleton batch.
+  {_Q2, _Ack2, [Item1]} = replayq:pop(Q1, #{count_limit => 10, bytes_limit => ItemSize - 1}),
+  {_Q3, _Ack3, [Item1]} = replayq:pop(Q1, #{count_limit => 10, bytes_limit => {at_most, ItemSize - 1}}),
+  %% ... but dropping _at least_ less bytes than 1 item should drop both of them.
+  {Q4, _Ack4, [Item1, Item2]} =
+    replayq:pop(Q1, #{count_limit => 10, bytes_limit => {at_least, ItemSize + 1}}),
+  ?assertEqual(0, replayq:bytes(Q4)),
+  ok = replayq:close(Q4),
+  ok.
+
 %% helpers ===========================================================
 
 cleanup(Dir) ->
@@ -586,3 +623,9 @@ filename(Segno) ->
 %% corrupt the segment
 corrupt(#{w_cur := #{fd := Fd}}) ->
   file:write(Fd, "some random bytes").
+
+%%%_* Emacs ====================================================================
+%%% Local Variables:
+%%% allout-layout: t
+%%% erlang-indent-level: 2
+%%% End:
