@@ -76,7 +76,7 @@
 -opaque q() :: #{
     config := mem_only | config(),
     stats := stats(),
-    in_mem := queue:queue(in_mem_item()),
+    in_mem := replayq_mem:queue(in_mem_item()),
     w_cur => w_cur(),
     committer => pid(),
     head_segno => segno(),
@@ -108,7 +108,7 @@
 open(#{mem_only := true} = C) ->
     #{
         stats => #{bytes => 0, count => 0},
-        in_mem => queue:new(),
+        in_mem => replayq_mem:new(),
         sizer => get_sizer(C),
         config => mem_only,
         max_total_bytes => maps:get(max_total_bytes, C, ?DEFAULT_REPLAYQ_LIMIT)
@@ -129,7 +129,7 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
                     w_cur => init_writer(Dir, empty, IsOffload),
                     committer => spawn_committer(?FIRST_SEGNO, Dir),
                     head_segno => ?FIRST_SEGNO,
-                    in_mem => queue:new()
+                    in_mem => replayq_mem:new()
                 };
             Segs ->
                 LastSegno = lists:last(Segs),
@@ -141,7 +141,7 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
                     w_cur => init_writer(Dir, LastSegno, IsOffload),
                     committer => spawn_committer(hd(Segs), Dir),
                     head_segno => hd(Segs),
-                    in_mem => queue:from_list(HeadItems)
+                    in_mem => replayq_mem:from_list(HeadItems)
                 }
         end,
     Q#{
@@ -185,7 +185,7 @@ dump_back_to_disk(#{
     marshaller := Marshaller
 }) ->
     IoData0 = get_unacked(process_info(self(), dictionary), ReaderSegno, Marshaller),
-    Items1 = queue:to_list(InMem),
+    Items1 = replayq_mem:to_list(InMem),
     IoData1 = lists:map(fun(?DISK_CP_ITEM(_, _, I)) -> make_iodata(I, Marshaller) end, Items1),
     %% ensure old segment file is deleted
     ok = ensure_deleted(filename(Dir, ReaderSegno)),
@@ -306,7 +306,7 @@ pop(Q, Opts) ->
 %% @doc peek the queue front item.
 -spec peek(q()) -> empty | item().
 peek(#{in_mem := HeadItems}) ->
-    case queue:peek(HeadItems) of
+    case replayq_mem:peek(HeadItems) of
         empty -> empty;
         {value, ?MEM_ONLY_ITEM(_, Item)} -> Item;
         {value, ?DISK_CP_ITEM(_, _, Item)} -> Item
@@ -340,7 +340,7 @@ count(#{stats := #{count := Count}}) -> Count.
 bytes(#{stats := #{bytes := Bytes}}) -> Bytes.
 
 is_empty(#{config := mem_only, in_mem := All}) ->
-    queue:is_empty(All);
+    replayq_mem:is_empty(All);
 is_empty(
     #{
         w_cur := #{segno := WriterSegno},
@@ -348,7 +348,7 @@ is_empty(
         in_mem := HeadItems
     } = Q
 ) ->
-    Result = ((WriterSegno =:= ReaderSegno) andalso queue:is_empty(HeadItems)),
+    Result = ((WriterSegno =:= ReaderSegno) andalso replayq_mem:is_empty(HeadItems)),
     %% assert
     Result = (count(Q) =:= 0).
 
@@ -387,7 +387,7 @@ transform(Id, [Item0 | Rest], Sizer, Count, Bytes, Acc) ->
     transform(NextId, Rest, Sizer, Count + 1, Bytes + Size, [Item | Acc]).
 
 append_in_mem([], Q) -> Q;
-append_in_mem([Item | Rest], Q) -> append_in_mem(Rest, queue:in(Item, Q)).
+append_in_mem([Item | Rest], Q) -> append_in_mem(Rest, replayq_mem:in(Item, Q)).
 
 pop(Q, _BytesMode, _Bytes, 0, AckRef, Acc, _StopFun, _StopFunAcc) ->
     Result = lists:reverse(Acc),
@@ -419,7 +419,7 @@ pop_mem(
     StopFun,
     StopFunAcc
 ) ->
-    case queue:out(InMem) of
+    case replayq_mem:out(InMem) of
         {{value, ?MEM_ONLY_ITEM(Sz, _Item)}, _} when
             BytesMode == at_most andalso Sz > Bytes andalso Acc =/= []
         ->
@@ -463,7 +463,7 @@ pop2(
     StopFun,
     StopFunAcc
 ) ->
-    case queue:out(HeadItems) of
+    case replayq_mem:out(HeadItems) of
         {empty, _} ->
             Q1 = open_next_seg(Q),
             pop(Q1, BytesMode, Bytes, Count, AckRef, Acc, StopFun, StopFunAcc);
@@ -486,7 +486,7 @@ pop2(
                     },
                     %% read the next segment in case current is drained
                     NewQ =
-                        case queue:is_empty(Rest) of
+                        case replayq_mem:is_empty(Rest) of
                             true -> open_next_seg(Q1);
                             false -> Q1
                         end,
@@ -529,7 +529,7 @@ open_next_seg(
 open_next_seg(Q0) ->
     Q1 = do_open_next_seg(Q0),
     #{in_mem := HeadItems} = Q1,
-    case queue:is_empty(HeadItems) of
+    case replayq_mem:is_empty(HeadItems) of
         true ->
             open_next_seg(Q1);
         false ->
@@ -568,7 +568,7 @@ do_open_next_seg(
     NextSegItems = read_items(Dir, NextSegno, ?NO_COMMIT_HIST, Sizer, Marshaller),
     Q#{
         head_segno := NextSegno,
-        in_mem := queue:from_list(NextSegItems),
+        in_mem := replayq_mem:from_list(NextSegItems),
         w_cur := WCur
     }.
 
