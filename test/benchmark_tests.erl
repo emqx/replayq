@@ -5,58 +5,61 @@
 -define(DIR, filename:join([data_dir(), ?FUNCTION_NAME, integer_to_list(uniq())])).
 -define(WRITE_CHUNK_SIZE, 1).
 -define(ITEM_BYTES, 256).
--define(RUN_SECS, 10). %% change to 10 or even more for real test
+%% change to 10 or even more for real test
+-define(RUN_SECS, 10).
 
 run_test_() ->
-  Dir = ?DIR,
-  Config = #{dir => Dir, seg_bytes => 100 bsl 20},
-  {timeout, ?RUN_SECS * 2,
-   fun() ->
-       Writter = erlang:spawn_link(fun() -> writter(Config) end),
-       Now = erlang:system_time(),
-       timer:sleep(timer:seconds(?RUN_SECS)),
-       _ = erlang:send(Writter, {stop, self()}),
-       Result = wait_for_result(Now),
-       print_result(Result)
-   end}.
+    Dir = ?DIR,
+    Config = #{dir => Dir, seg_bytes => 100 bsl 20},
+    {timeout, ?RUN_SECS * 2, fun() ->
+        Writter = erlang:spawn_link(fun() -> writter(Config) end),
+        Now = erlang:system_time(),
+        timer:sleep(timer:seconds(?RUN_SECS)),
+        _ = erlang:send(Writter, {stop, self()}),
+        Result = wait_for_result(Now),
+        print_result(Result)
+    end}.
 
 wait_for_result(Then) ->
-  receive
-    {result, Stats} ->
-      Now = erlang:system_time(),
-      IntervalSeconds = (Now - Then) / 1000000000,
-      Stats#{time => IntervalSeconds}
-  end.
+    receive
+        {result, Stats} ->
+            Now = erlang:system_time(),
+            IntervalSeconds = (Now - Then) / 1000000000,
+            Stats#{time => IntervalSeconds}
+    end.
 
 print_result(#{count := Count, bytes := Bytes, time := Seconds}) ->
-  io:format(user, "=============\n~p messages per second\n"
-                  "~p bytes per second==================\n",
-                  [Count / Seconds, Bytes / Seconds]).
+    io:format(
+        user,
+        "=============\n~p messages per second\n"
+        "~p bytes per second==================\n",
+        [Count / Seconds, Bytes / Seconds]
+    ).
 
 writter(Config) ->
-  Q = replayq:open(Config),
-  writter_loop(Q).
+    Q = replayq:open(Config),
+    writter_loop(Q).
 
 writter_loop(Q0) ->
-  Q = do_write_chunk(Q0, ?WRITE_CHUNK_SIZE),
-  receive
-    {stop, Pid} ->
-      Pid ! {result, #{bytes => replayq:bytes(Q),
-                       count => replayq:count(Q)
-                      }},
-      exit(normal)
-  after
-    0 ->
-      writter_loop(Q)
-  end.
+    Q = do_write_chunk(Q0, ?WRITE_CHUNK_SIZE),
+    receive
+        {stop, Pid} ->
+            Pid !
+                {result, #{
+                    bytes => replayq:bytes(Q),
+                    count => replayq:count(Q)
+                }},
+            exit(normal)
+    after 0 ->
+        writter_loop(Q)
+    end.
 
 do_write_chunk(Q, N) ->
-  Bytes = lists:duplicate(N, iolist_to_binary(lists:duplicate(?ITEM_BYTES, 0))),
-  replayq:append(Q, Bytes).
+    Bytes = lists:duplicate(N, iolist_to_binary(lists:duplicate(?ITEM_BYTES, 0))),
+    replayq:append(Q, Bytes).
 
 data_dir() -> "./test-data".
 
 uniq() ->
-  {_, _, Micro} = erlang:timestamp(),
-  Micro.
-
+    {_, _, Micro} = erlang:timestamp(),
+    Micro.

@@ -81,7 +81,7 @@ handle_cast(_Cast, State) ->
     {noreply, State}.
 
 handle_info({'EXIT', Pid, _Reason}, #{committers := Committers0} = State0) when
-      is_map_key(Pid, Committers0)
+    is_map_key(Pid, Committers0)
 ->
     {_, State} = pop_committer(State0, Pid),
     {noreply, State};

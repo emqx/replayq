@@ -44,3 +44,7 @@ coveralls:
 .PHONY: hex-publish
 hex-publish:
 	@rebar3 hex publish --repo=hexpm
+
+.PHONY: fmt
+fmt:
+	@rebar3 fmt -w
