@@ -48,3 +48,7 @@ hex-publish:
 .PHONY: fmt
 fmt:
 	@rebar3 fmt -w
+
+.PHONY: fmt-check
+fmt-check:
+	@rebar3 fmt --check
