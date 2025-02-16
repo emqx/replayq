@@ -18,49 +18,73 @@
 -module(replayq_mem).
 
 -export([
-    new/0,
-    from_list/1,
-    to_list/1,
-    peek/1,
-    is_empty/1,
-    in/2,
-    out/1
-    ]).
+    new/2,
+    from_list/3,
+    to_list/2,
+    peek/2,
+    is_empty/2,
+    in/3,
+    in_r/3,
+    in_batch/3,
+    out/2
+]).
 
--export_type([queue/1]).
+-export_type([options/0, queue/1]).
 
--opaque queue(Term) :: queue:queue(Term).
+-type options() :: term().
+%% depends on the implementation of the queue module
+-type queue(_Term) :: term().
+
+-callback new(options()) -> queue(_).
+-callback to_list(queue(_)) -> [term()].
+-callback peek(queue(_)) -> empty | {value, term()}.
+-callback is_empty(queue(_)) -> boolean().
+-callback in(term(), queue(_)) -> queue(_).
+-callback in_batch([term()], queue(_)) -> queue(_).
+-callback out(queue(_)) -> {empty, queue(_)} | {{value, term()}, queue(_)}.
 
 %% @doc Create a new queue.
--spec new() -> queue(term()).
-new() -> queue:new().
+-spec new(module(), options()) -> queue(_).
+new(Module, Options) ->
+    Module:new(Options).
 
 %% @doc Create a new queue from a list.
--spec from_list([Term]) -> queue(Term).
-from_list(List) -> queue:from_list(List).
+-spec from_list(module(), options(), [term()]) -> queue(_).
+from_list(Module, Options, List) ->
+    Q = Module:new(Options),
+    Module:in_batch(List, Q).
 
 %% @doc Convert a queue to a list.
--spec to_list(queue(Term)) -> [Term].
-to_list(Q) -> queue:to_list(Q).
+-spec to_list(module(), queue(_)) -> [term()].
+to_list(Module, Q) ->
+    Module:to_list(Q).
 
-%% @doc Peek the front item of the queue.
--spec peek(queue(Term)) -> empty | {value, Term}.
-peek(Q) -> queue:peek(Q).
+%% @doc Peek at the next item in the queue.
+-spec peek(module(), queue(_)) -> empty | {value, term()}.
+peek(Module, Q) ->
+    Module:peek(Q).
 
-%% @doc Return 'true' if the queue is empty.
--spec is_empty(queue(_)) -> boolean().
-is_empty(Q) -> queue:is_empty(Q).
+%% @doc Check if the queue is empty.
+-spec is_empty(module(), queue(_)) -> boolean().
+is_empty(Module, Q) ->
+    Module:is_empty(Q).
 
-%% @doc Enqueue an item to the queue.
--spec in(Term, queue(Term)) -> queue(Term).
-in(Item, Q) -> queue:in(Item, Q).
+%% @doc Insert an item into the queue.
+-spec in(module(), term(), queue(_)) -> queue(_).
+in(Module, Item, Q) ->
+    Module:in(Item, Q).
 
-%% @doc Dequeue an item from the queue.
--spec out(queue(Term)) -> {empty, queue(Term)} | {value, Term, queue(Term)}.
-out(Q) -> queue:out(Q).
+%% @doc Insert an item into the queue in reverse order.
+-spec in_r(module(), term(), queue(_)) -> queue(_).
+in_r(Module, Item, Q) ->
+    Module:in_r(Item, Q).
 
-%%%_* Emacs ====================================================================
-%%% Local Variables:
-%%% allout-layout: t
-%%% erlang-indent-level: 2
-%%% End:
+%% @doc Insert a batch of items into the queue.
+-spec in_batch(module(), [term()], queue(_)) -> queue(_).
+in_batch(Module, Items, Q) ->
+    Module:in_batch(Items, Q).
+
+%% @doc Remove an item from the queue.
+-spec out(module(), queue(_)) -> {empty, queue(_)} | {{value, term()}, queue(_)}.
+out(Module, Q) ->
+    Module:out(Q).
