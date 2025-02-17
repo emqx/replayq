@@ -438,7 +438,7 @@ pop_mem(
         {{value, ?MEM_ONLY_ITEM(Sz, _) = MI}, InMem1} when
             BytesMode == at_most andalso Sz > Bytes andalso Acc =/= []
         ->
-            %% put back the item back to the queue
+            %% put the item back to the queue in reverse order
             InMem2 = replayq_mem:in_r(MemQueueModule, MI, InMem1),
             {Q#{in_mem := InMem2}, ?NOTHING_TO_ACK, lists:reverse(Acc)};
         {{value, ?MEM_ONLY_ITEM(Sz, Item)}, Rest} ->
@@ -489,7 +489,7 @@ pop2(
             BytesMode == at_most andalso Sz > Bytes andalso Acc =/= []
         ->
             %% taking the head item would cause exceeding size limit
-            %% put back the item back to the queue
+            %% put the item back to the queue in reverse order
             InMem2 = replayq_mem:in_r(MemQueueModule, MI, InMem1),
             {Q#{in_mem := InMem2}, AckRef, lists:reverse(Acc)};
         {{value, ?DISK_CP_ITEM(Id, Sz, Item)}, Rest} ->
