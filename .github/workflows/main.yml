@@ -19,6 +19,7 @@ jobs:
           otp-version: ${{ matrix.otp }}
           rebar3-version: ${{ matrix.rebar3 }}
       - run: |
+          make fmt-check
           make
       - name: Archive CT Logs
         uses: actions/upload-artifact@v4.4.3
