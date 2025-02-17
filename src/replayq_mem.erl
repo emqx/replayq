@@ -26,7 +26,8 @@
     in/3,
     in_r/3,
     in_batch/3,
-    out/2
+    out/2,
+    purge/2
 ]).
 
 -export_type([options/0, queue/1]).
@@ -42,6 +43,7 @@
 -callback in(term(), queue(_)) -> queue(_).
 -callback in_batch([term()], queue(_)) -> queue(_).
 -callback out(queue(_)) -> {empty, queue(_)} | {{value, term()}, queue(_)}.
+-callback purge(queue(_)) -> ok.
 
 %% @doc Create a new queue.
 -spec new(module(), options()) -> queue(_).
@@ -52,7 +54,7 @@ new(Module, Options) ->
 -spec from_list(module(), options(), [term()]) -> queue(_).
 from_list(Module, Options, List) ->
     Q = Module:new(Options),
-    Module:in_batch(List, Q).
+    in_batch(Module, List, Q).
 
 %% @doc Convert a queue to a list.
 -spec to_list(module(), queue(_)) -> [term()].
@@ -88,3 +90,14 @@ in_batch(Module, Items, Q) ->
 -spec out(module(), queue(_)) -> {empty, queue(_)} | {{value, term()}, queue(_)}.
 out(Module, Q) ->
     Module:out(Q).
+
+%% @doc Purge the queue.
+-spec purge(module(), queue(_)) -> ok.
+purge(Module, Q) ->
+    Module:purge(Q).
+
+%%%_* Emacs ====================================================================
+%%% Local Variables:
+%%% allout-layout: t
+%%% erlang-indent-level: 2
+%%% End:

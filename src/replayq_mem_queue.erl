@@ -26,7 +26,8 @@
     in/2,
     in_r/2,
     in_batch/2,
-    out/1
+    out/1,
+    purge/1
 ]).
 
 -export_type([queue/1]).
@@ -70,6 +71,11 @@ in_batch(Items, Q) ->
 %% @doc Dequeue an item from the queue.
 -spec out(queue(Term)) -> {empty, queue(Term)} | {{value, Term}, queue(Term)}.
 out(Q) -> queue:out(Q).
+
+%% @doc Purge the queue.
+%% This implementation does nothing.
+-spec purge(queue(_)) -> ok.
+purge(_Q) -> ok.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

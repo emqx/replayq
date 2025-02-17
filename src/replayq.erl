@@ -159,9 +159,9 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
     }.
 
 -spec close(q() | w_cur()) -> ok | {error, any()}.
-close(#{config := mem_only}) ->
-    ok;
-close(#{w_cur := W_Cur, committer := Pid} = Q) ->
+close(#{config := mem_only, in_mem := InMem, mem_queue_module := MemQueueModule}) ->
+    ok = replayq_mem:purge(MemQueueModule, InMem);
+close(#{w_cur := W_Cur, committer := Pid, in_mem := InMem, mem_queue_module := MemQueueModule} = Q) ->
     MRef = erlang:monitor(process, Pid),
     Pid ! ?STOP,
     unlink(Pid),
@@ -171,6 +171,7 @@ close(#{w_cur := W_Cur, committer := Pid} = Q) ->
     end,
     ok = maybe_dump_back_to_disk(Q),
     Res = do_close(W_Cur),
+    ok = replayq_mem:purge(MemQueueModule, InMem),
     ok = replayq_registry:deregister_committer(self()),
     Res.
 
@@ -231,8 +232,10 @@ do_get_unacked([{_, Items} | Rest], Marshaller) ->
         | do_get_unacked(Rest, Marshaller)
     ].
 
+%% @doc Append items to the rear of the queue.
 -spec append(q(), [item()]) -> q().
 append(Q, []) ->
+    %% micro-optimization for empty list
     Q;
 append(
     #{
@@ -398,10 +401,8 @@ transform(Id, [Item0 | Rest], Sizer, Count, Bytes, Acc) ->
         end,
     transform(NextId, Rest, Sizer, Count + 1, Bytes + Size, [Item | Acc]).
 
-append_in_mem(_, [], Q) ->
-    Q;
-append_in_mem(MemQueueModule, [Item | Rest], Q) ->
-    append_in_mem(MemQueueModule, Rest, replayq_mem:in(MemQueueModule, Item, Q)).
+append_in_mem(MemQueueModule, Items, Q) ->
+    replayq_mem:in_batch(MemQueueModule, Items, Q).
 
 pop(Q, _BytesMode, _Bytes, 0, AckRef, Acc, _StopFun, _StopFunAcc) ->
     Result = lists:reverse(Acc),
@@ -441,13 +442,14 @@ pop_mem(
             %% put the item back to the queue in reverse order
             InMem2 = replayq_mem:in_r(MemQueueModule, MI, InMem1),
             {Q#{in_mem := InMem2}, ?NOTHING_TO_ACK, lists:reverse(Acc)};
-        {{value, ?MEM_ONLY_ITEM(Sz, Item)}, Rest} ->
+        {{value, ?MEM_ONLY_ITEM(Sz, Item) = MI}, InMem1} ->
             case StopFun(Item, StopFunAcc) of
                 true ->
-                    {Q, ?NOTHING_TO_ACK, lists:reverse(Acc)};
+                    InMem2 = replayq_mem:in_r(MemQueueModule, MI, InMem1),
+                    {Q#{in_mem := InMem2}, ?NOTHING_TO_ACK, lists:reverse(Acc)};
                 NewStopFunAcc ->
                     NewQ = Q#{
-                        in_mem := Rest,
+                        in_mem := InMem1,
                         stats := Stats#{
                             count := TotalCount - 1,
                             bytes := TotalBytes - Sz
@@ -492,13 +494,14 @@ pop2(
             %% put the item back to the queue in reverse order
             InMem2 = replayq_mem:in_r(MemQueueModule, MI, InMem1),
             {Q#{in_mem := InMem2}, AckRef, lists:reverse(Acc)};
-        {{value, ?DISK_CP_ITEM(Id, Sz, Item)}, Rest} ->
+        {{value, ?DISK_CP_ITEM(Id, Sz, Item) = MI}, InMem1} ->
             case StopFun(Item, StopFunAcc) of
                 true ->
-                    {Q, AckRef, lists:reverse(Acc)};
+                    InMem2 = replayq_mem:in_r(MemQueueModule, MI, InMem1),
+                    {Q#{in_mem := InMem2}, AckRef, lists:reverse(Acc)};
                 NewStopFunAcc ->
                     Q1 = Q#{
-                        in_mem := Rest,
+                        in_mem := InMem1,
                         stats := Stats#{
                             count := TotalCount - 1,
                             bytes := TotalBytes - Sz
@@ -506,7 +509,7 @@ pop2(
                     },
                     %% read the next segment in case current is drained
                     NewQ =
-                        case replayq_mem:is_empty(MemQueueModule, Rest) of
+                        case replayq_mem:is_empty(MemQueueModule, InMem1) of
                             true -> open_next_seg(Q1);
                             false -> Q1
                         end,
