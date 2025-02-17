@@ -1,15 +1,50 @@
--module(prop_tests).
+%%--------------------------------------------------------------------
+%% Copyright (c) 2018-2025 EMQ Technologies Co., Ltd. All Rights Reserved.
+%%
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
+%%--------------------------------------------------------------------
+
+-module(replayq_proper_SUITE).
+-compile(export_all).
 
 -include_lib("proper/include/proper.hrl").
+-include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-run_persistent_test_() ->
-    Opts = [{numtests, 1000}, {to_file, user}],
-    {timeout, 60, fun() -> ?assert(proper:quickcheck(prop_run(false), Opts)) end}.
+all() ->
+    [
+        F
+     || {F, _} <- ?MODULE:module_info(exports),
+        is_t_function(atom_to_list(F))
+    ].
 
-run_offload_test_() ->
+is_t_function("t_" ++ _) -> true;
+is_t_function(_) -> false.
+
+init_per_suite(Config) ->
+    {ok, _} = application:ensure_all_started(replayq),
+    Config.
+
+end_per_suite(_Config) ->
+    ok.
+
+t_run_persistent(_Config) ->
     Opts = [{numtests, 1000}, {to_file, user}],
-    {timeout, 60, fun() -> ?assert(proper:quickcheck(prop_run(true), Opts)) end}.
+    true = proper:quickcheck(prop_run(false), Opts).
+
+t_run_offload(_Config) ->
+    Opts = [{numtests, 1000}, {to_file, user}],
+    true = proper:quickcheck(prop_run(true), Opts).
 
 prop_run(IsOffload) ->
     ?FORALL(
