@@ -562,7 +562,8 @@ do_open_next_seg(
         head_segno := ReaderSegno,
         w_cur := #{segno := WriterSegno, fd := Fd} = WCur0,
         sizer := Sizer,
-        marshaller := Marshaller
+        marshaller := Marshaller,
+        mem_queue_module := MemQueueModule
     } = Q
 ) ->
     NextSegno = ?NEXT_SEGNO(ReaderSegno),
@@ -586,12 +587,10 @@ do_open_next_seg(
                 WCur0
         end,
     NextSegItems = read_items(Dir, NextSegno, ?NO_COMMIT_HIST, Sizer, Marshaller),
-    MemQueueModule = get_mem_queue_module(Config),
     MemQueueOpts = get_mem_queue_opts(Config),
     Q#{
         head_segno := NextSegno,
         in_mem := replayq_mem:from_list(MemQueueModule, MemQueueOpts, NextSegItems),
-        mem_queue_module => MemQueueModule,
         w_cur := WCur
     }.
 
