@@ -20,7 +20,11 @@
 -include_lib("eunit/include/eunit.hrl").
 
 all() ->
-    [{group, queue}, {group, ets_exclusive}].
+    [
+        {group, queue},
+        {group, ets_exclusive},
+        {group, ets_shared}
+    ].
 
 all_cases() ->
     [
@@ -32,7 +36,8 @@ all_cases() ->
 groups() ->
     [
         {queue, [], all_cases()},
-        {ets_exclusive, [], all_cases()}
+        {ets_exclusive, [], all_cases()},
+        {ets_shared, [], all_cases()}
     ].
 
 init_per_group(Group, Config) ->
@@ -710,7 +715,8 @@ open(CtConfig, Config0) ->
     Config =
         case proplists:get_value(ct_group, CtConfig) of
             queue -> Config0;
-            ets_exclusive -> Config0#{mem_queue_module => replayq_mem_ets_exclusive}
+            ets_exclusive -> Config0#{mem_queue_module => replayq_mem_ets_exclusive};
+            ets_shared -> Config0#{mem_queue_module => replayq_mem_ets_shared}
         end,
     replayq:open(Config).
 

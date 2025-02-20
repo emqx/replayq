@@ -21,12 +21,17 @@
 -include_lib("eunit/include/eunit.hrl").
 
 all() ->
-    [{group, queue}, {group, ets_exclusive}].
+    [
+        {group, queue},
+        {group, ets_exclusive},
+        {group, ets_shared}
+    ].
 
 groups() ->
     [
         {queue, [], all_cases()},
-        {ets_exclusive, [], all_cases()}
+        {ets_exclusive, [], all_cases()},
+        {ets_shared, [], all_cases()}
     ].
 
 all_cases() ->
@@ -55,7 +60,8 @@ end_per_suite(_Config) ->
 get_mem_queue_module(Config) ->
     case proplists:get_value(ct_group, Config) of
         queue -> replayq_mem_queue;
-        ets_exclusive -> replayq_mem_ets_exclusive
+        ets_exclusive -> replayq_mem_ets_exclusive;
+        ets_shared -> replayq_mem_ets_shared
     end.
 
 t_run_persistent(Config) ->
@@ -69,24 +75,40 @@ t_run_offload(Config) ->
     true = proper:quickcheck(prop_run(MemQueueModule, true), Opts).
 
 prop_run(MemQueueModule, IsOffload) ->
+    MQOwner = spawn_link(fun() ->
+        receive
+            _ -> ok
+        end
+    end),
+    DQOwner = spawn_link(fun() ->
+        receive
+            _ -> ok
+        end
+    end),
     ?FORALL(
         {SegBytes, OpList},
         {prop_seg_bytes(), prop_op_list(IsOffload)},
         begin
             Dir = filename:join([data_dir(), integer_to_list(erlang:system_time())]),
-            MQCfg = #{mem_only => true, mem_queue_module => MemQueueModule},
+            MQCfg = #{
+                mem_only => true,
+                mem_queue_module => MemQueueModule,
+                mem_queue_opts => #{owner => MQOwner}
+            },
             MQ = replayq:open(MQCfg),
             DQCfg = #{
                 dir => Dir,
                 seg_bytes => SegBytes,
                 offload => IsOffload,
-                mem_queue_module => MemQueueModule
+                mem_queue_module => MemQueueModule,
+                mem_queue_opts => #{owner => DQOwner}
             },
             DQ = replayq:open(DQCfg),
             try
                 ok = apply_ops(MQ, DQ, OpList, MQCfg, DQCfg),
                 true
             after
+                replayq:close(MQ),
                 replayq:close(DQ),
                 ok = delete_dir(Dir)
             end

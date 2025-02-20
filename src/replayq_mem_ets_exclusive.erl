@@ -21,14 +21,14 @@
 
 -export([
     new/1,
-    to_list/1,
+    peek_all/1,
     peek/1,
     is_empty/1,
     in/2,
     in_r/2,
     in_batch/2,
     out/1,
-    purge/1
+    destroy/1
 ]).
 
 -export_type([queue/0]).
@@ -41,9 +41,9 @@ new(_) ->
     Tab = ets:new(?MODULE, [ordered_set, public]),
     #{ets_tab => Tab, next_id => 1}.
 
-%% @doc Convert a queue to a list.
--spec to_list(queue()) -> [term()].
-to_list(#{ets_tab := Tab}) ->
+%% @doc Peek all items from the queue.
+-spec peek_all(queue()) -> [term()].
+peek_all(#{ets_tab := Tab}) ->
     lists:map(fun({_Id, Item}) -> Item end, ets:tab2list(Tab)).
 
 %% @doc Peek the front item of the queue.
@@ -95,14 +95,14 @@ out(#{ets_tab := Tab} = Q) ->
         '$end_of_table' ->
             {empty, Q};
         Id ->
-            [{Id, Item}] = ets:lookup(Tab, Id),
+            Item = ets:lookup_element(Tab, Id, 2),
             ets:delete(Tab, Id),
             {{value, Item}, Q}
     end.
 
-%% @doc Purge the queue.
--spec purge(queue()) -> ok.
-purge(#{ets_tab := Tab}) ->
+%% @doc Destroy the queue.
+-spec destroy(queue()) -> ok.
+destroy(#{ets_tab := Tab}) ->
     case ets:info(Tab, owner) of
         undefined ->
             %% already deleted

@@ -19,15 +19,14 @@
 
 -export([
     new/2,
-    from_list/3,
-    to_list/2,
+    peek_all/2,
     peek/2,
     is_empty/2,
     in/3,
     in_r/3,
     in_batch/3,
     out/2,
-    purge/2
+    destroy/2
 ]).
 
 -export_type([options/0, queue/1]).
@@ -37,29 +36,23 @@
 -type queue(_Term) :: term().
 
 -callback new(options()) -> queue(_).
--callback to_list(queue(_)) -> [term()].
+-callback peek_all(queue(_)) -> [term()].
 -callback peek(queue(_)) -> empty | {value, term()}.
 -callback is_empty(queue(_)) -> boolean().
 -callback in(term(), queue(_)) -> queue(_).
 -callback in_batch([term()], queue(_)) -> queue(_).
 -callback out(queue(_)) -> {empty, queue(_)} | {{value, term()}, queue(_)}.
--callback purge(queue(_)) -> ok.
+-callback destroy(queue(_)) -> ok.
 
 %% @doc Create a new queue.
 -spec new(module(), options()) -> queue(_).
 new(Module, Options) ->
     Module:new(Options).
 
-%% @doc Create a new queue from a list.
--spec from_list(module(), options(), [term()]) -> queue(_).
-from_list(Module, Options, List) ->
-    Q = Module:new(Options),
-    in_batch(Module, List, Q).
-
-%% @doc Convert a queue to a list.
--spec to_list(module(), queue(_)) -> [term()].
-to_list(Module, Q) ->
-    Module:to_list(Q).
+%% @doc Peek all items from the queue.
+-spec peek_all(module(), queue(_)) -> [term()].
+peek_all(Module, Q) ->
+    Module:peek_all(Q).
 
 %% @doc Peek at the next item in the queue.
 -spec peek(module(), queue(_)) -> empty | {value, term()}.
@@ -91,10 +84,10 @@ in_batch(Module, Items, Q) ->
 out(Module, Q) ->
     Module:out(Q).
 
-%% @doc Purge the queue.
--spec purge(module(), queue(_)) -> ok.
-purge(Module, Q) ->
-    Module:purge(Q).
+%% @doc Destroy the queue.
+-spec destroy(module(), queue(_)) -> ok.
+destroy(Module, Q) ->
+    Module:destroy(Q).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:
