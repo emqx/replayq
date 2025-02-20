@@ -153,7 +153,7 @@ destroy(Q) ->
 %% @doc Purge the queue by owner pid.
 -spec purge_by_owner(pid()) -> ok.
 purge_by_owner(Owner) ->
-    Ms = ets:fun2ms(fun({?KEY(Pid, '_'), _}) when Pid =:= Owner -> true end),
+    Ms = ets:fun2ms(fun({?KEY(Pid, '_'), _}) -> Pid =:= Owner end),
     ets:select_delete(?ETS_TAB, Ms),
     ok.
 

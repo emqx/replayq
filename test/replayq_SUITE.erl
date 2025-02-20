@@ -37,7 +37,7 @@ groups() ->
     [
         {queue, [], all_cases()},
         {ets_exclusive, [], all_cases() ++ [in_r_not_allowed]},
-        {ets_shared, [], all_cases() ++ [in_r_not_allowed]}
+        {ets_shared, [], all_cases() ++ [in_r_not_allowed, owner_down_cause_purge]}
     ].
 
 init_per_group(Group, Config) ->
@@ -684,6 +684,32 @@ in_r_not_allowed(CtConfig) ->
     #{in_mem := InMem, mem_queue_module := MemQueueModule} = Q1,
     ?assertError(badarg, replayq_mem:in_r(MemQueueModule, <<"item">>, InMem)),
     ok = replayq:close(Q1).
+
+owner_down_cause_purge(CtConfig) ->
+    {Owner, Ref} = spawn_monitor(fun() ->
+        receive
+            stop -> ok
+        end
+    end),
+    Q = open(CtConfig, #{
+        mem_only => true,
+        mem_queue_module => replayq_mem_ets_shared,
+        mem_queue_opts => #{owner => Owner}
+    }),
+    Q1 = replayq:append(Q, [<<"item1">>]),
+    ?assertEqual(1, replayq:count(Q1)),
+    ?assertEqual(<<"item1">>, replayq:peek(Q1)),
+    Owner ! stop,
+    receive
+        {'DOWN', Ref, process, Owner, _Reason} ->
+            ok
+    end,
+    _ = sys:get_state(replayq_registry),
+    %% the counter is still kept in the Q1 term
+    ?assertEqual(1, replayq:count(Q1)),
+    %% but the queue is empty
+    ?assertEqual(empty, replayq:peek(Q1)),
+    ok.
 
 %% helpers ===========================================================
 

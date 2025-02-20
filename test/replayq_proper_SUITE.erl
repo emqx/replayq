@@ -75,16 +75,13 @@ t_run_offload(Config) ->
     true = proper:quickcheck(prop_run(MemQueueModule, true), Opts).
 
 prop_run(MemQueueModule, IsOffload) ->
-    MQOwner = spawn_link(fun() ->
+    F = fun() ->
         receive
             _ -> ok
         end
-    end),
-    DQOwner = spawn_link(fun() ->
-        receive
-            _ -> ok
-        end
-    end),
+    end,
+    MQOwner = spawn_link(F),
+    DQOwner = spawn_link(F),
     ?FORALL(
         {SegBytes, OpList},
         {prop_seg_bytes(), prop_op_list(IsOffload)},
