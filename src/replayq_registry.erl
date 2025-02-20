@@ -105,7 +105,7 @@ handle_call(#register_slot_owner{pid = Pid}, _From, #{slot_owners := Owners0} = 
     case is_map_key(Pid, Owners0) of
         false ->
             Ref = erlang:monitor(process, Pid),
-            {reply, ok, State0#{slot_owners => Owners0#{Pid => Ref}}};
+            {reply, ok, State0#{slot_owners := Owners0#{Pid => Ref}}};
         true ->
             {reply, {error, already_registered}, State0}
     end;
@@ -115,7 +115,7 @@ handle_call(#deregister_slot_owner{pid = Pid}, _From, #{slot_owners := Owners0} 
             {reply, ok, State0};
         Ref ->
             erlang:demonitor(Ref, [flush]),
-            {reply, ok, State0#{slot_owners => maps:remove(Pid, Owners0)}}
+            {reply, ok, State0#{slot_owners := maps:remove(Pid, Owners0)}}
     end;
 handle_call(_Call, _From, State) ->
     {reply, {error, unknown_call}, State}.
@@ -128,7 +128,7 @@ handle_info({'DOWN', _Ref, process, Pid, _Info}, #{slot_owners := Owners0} = Sta
 ->
     Owners = maps:remove(Pid, Owners0),
     ok = replayq_mem_ets_shared:purge_by_owner(Pid),
-    {noreply, State0#{slot_owners => Owners}};
+    {noreply, State0#{slot_owners := Owners}};
 handle_info({'EXIT', Pid, _Reason}, #{committers := Committers0} = State0) when
     is_map_key(Pid, Committers0)
 ->

@@ -70,6 +70,8 @@ in(Module, Item, Q) ->
     Module:in(Item, Q).
 
 %% @doc Insert an item into the queue in reverse order.
+%% This is only intended for returning items to the queue after out/2.
+%% But not for normal inverse order enqueue.
 -spec in_r(module(), term(), queue(_)) -> queue(_).
 in_r(Module, Item, Q) ->
     Module:in_r(Item, Q).

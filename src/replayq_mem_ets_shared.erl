@@ -109,6 +109,9 @@ in_r(Item, Q) ->
     Owner = owner(Q),
     case first_key(Owner) of
         {key, ?KEY(Owner, Id)} ->
+            %% Id is the key of the first item in the queue
+            %% do not allow inverse order enqueue
+            Id =< 1 andalso erlang:error(badarg),
             PrevKey = ?KEY(Owner, Id - 1),
             ets:insert(?ETS_TAB, {PrevKey, Item}),
             Q;
@@ -134,8 +137,7 @@ out(Q) ->
     Owner = owner(Q),
     case first_key(Owner) of
         {key, ?KEY(Owner, Id)} ->
-            Item = ets:lookup_element(?ETS_TAB, ?KEY(Owner, Id), 2),
-            ets:delete(?ETS_TAB, ?KEY(Owner, Id)),
+            [{_, Item}] = ets:take(?ETS_TAB, ?KEY(Owner, Id)),
             {{value, Item}, Q};
         empty ->
             {empty, Q}
