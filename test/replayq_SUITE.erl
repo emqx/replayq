@@ -36,8 +36,8 @@ all_cases() ->
 groups() ->
     [
         {queue, [], all_cases()},
-        {ets_exclusive, [], all_cases() ++ [in_r_not_allowed]},
-        {ets_shared, [], all_cases() ++ [in_r_not_allowed, owner_down_cause_purge]}
+        {ets_exclusive, [], all_cases() },
+        {ets_shared, [], all_cases() ++ [owner_down_cause_purge]}
     ].
 
 init_per_group(Group, Config) ->
@@ -677,13 +677,6 @@ test_pop_bytes(CtConfig, Config, BytesMode) ->
     end,
     ok = replayq:close(Q0),
     ok.
-
-in_r_not_allowed(CtConfig) ->
-    Q = open(CtConfig, #{mem_only => true}),
-    Q1 = replayq:append(Q, [<<"item1">>]),
-    #{in_mem := InMem, mem_queue_module := MemQueueModule} = Q1,
-    ?assertError(badarg, replayq_mem:in_r(MemQueueModule, <<"item">>, InMem)),
-    ok = replayq:close(Q1).
 
 owner_down_cause_purge(CtConfig) ->
     {Owner, Ref} = spawn_monitor(fun() ->

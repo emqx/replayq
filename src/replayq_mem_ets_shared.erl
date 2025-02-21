@@ -45,11 +45,14 @@
 -include_lib("stdlib/include/ms_transform.hrl").
 
 -define(ETS_TAB, ?MODULE).
+%% ID starts from 1, assume it's not possible to in_r 1 billion items
+-define(MIN_KEY(PID), {PID, -1_000_000_000}).
 -define(KEY(PID, ID), {PID, ID}).
 
--type key() :: {pid(), non_neg_integer()}.
+-type id() :: integer().
+-type key() :: {pid(), id()}.
 -type item() :: term().
--opaque queue() :: #{next_id := non_neg_integer()}.
+-opaque queue() :: #{next_id := id()}.
 
 %% @doc Create the globally shared ETS table.
 -spec boot_init() -> ok.
@@ -108,10 +111,7 @@ in(Item, #{next_id := NextId} = Q) ->
 in_r(Item, Q) ->
     Owner = owner(Q),
     case first_key(Owner) of
-        {key, ?KEY(Owner, Id)} ->
-            %% Id is the key of the first item in the queue
-            %% do not allow inverse order enqueue
-            Id =< 1 andalso erlang:error(badarg),
+        {key, ?KEY(Pid, Id)} when Pid =:= Owner ->
             PrevKey = ?KEY(Owner, Id - 1),
             ets:insert(?ETS_TAB, {PrevKey, Item}),
             Q;
@@ -136,7 +136,7 @@ in_batch(Items, #{next_id := NextId} = Q) ->
 out(Q) ->
     Owner = owner(Q),
     case first_key(Owner) of
-        {key, ?KEY(Owner, Id)} ->
+        {key, ?KEY(Pid, Id)} when Pid =:= Owner ->
             [{_, Item}] = ets:take(?ETS_TAB, ?KEY(Owner, Id)),
             {{value, Item}, Q};
         empty ->
@@ -160,7 +160,7 @@ purge_by_owner(Owner) ->
 %% Get the first key in the queue.
 -spec first_key(pid()) -> empty | {key, key()}.
 first_key(Owner) ->
-    case ets:next(?ETS_TAB, ?KEY(Owner, 0)) of
+    case ets:next(?ETS_TAB, ?MIN_KEY(Owner)) of
         ?KEY(Pid, _) = Key when Pid =:= Owner ->
             {key, Key};
         _ ->

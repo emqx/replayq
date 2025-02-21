@@ -33,7 +33,8 @@
 
 -export_type([queue/0]).
 
--opaque queue() :: #{ets_tab := ets:tab(), next_id := non_neg_integer()}.
+-type id() :: integer().
+-opaque queue() :: #{ets_tab := ets:tab(), next_id := id()}.
 
 %% @doc Create a new queue.
 -spec new(_) -> queue().
@@ -75,9 +76,6 @@ in_r(Item, #{ets_tab := Tab} = Q) ->
         '$end_of_table' ->
             in(Item, Q);
         Id ->
-            %% Id is the key of the first item in the queue
-            %% do not allow inverse order enqueue
-            Id =< 1 andalso erlang:error(badarg),
             ets:insert(Tab, {Id - 1, Item}),
             Q
     end.
