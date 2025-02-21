@@ -630,14 +630,8 @@ do_find_segnos_to_delete(_Dir, Segnos, ?NO_COMMIT_HIST) ->
     {[], Segnos};
 do_find_segnos_to_delete(Dir, Segnos0, {CommittedSegno, CommittedId}) ->
     {SegnosToDelete, Segnos} = lists:partition(fun(N) -> N < CommittedSegno end, Segnos0),
-    case
-        Segnos =/= [] andalso
-            hd(Segnos) =:= CommittedSegno andalso
-            is_all_consumed(Dir, CommittedSegno, CommittedId)
-    of
+    case is_all_consumed(Dir, CommittedSegno, CommittedId, Segnos) of
         true ->
-            %% assert
-            CommittedSegno = hd(Segnos),
             %% all items in the oldest segment have been consumed,
             %% no need to keep this segment
             {[CommittedSegno | SegnosToDelete], tl(Segnos)};
@@ -647,8 +641,10 @@ do_find_segnos_to_delete(Dir, Segnos0, {CommittedSegno, CommittedId}) ->
 
 %% ALL items are consumed if the committed item ID is no-less than the number
 %% of items in this segment
-is_all_consumed(Dir, CommittedSegno, CommittedId) ->
-    CommittedId >= erlang:length(do_read_items(Dir, CommittedSegno)).
+is_all_consumed(Dir, CommittedSegno, CommittedId, [Segno | _]) when Segno =:= CommittedSegno ->
+    CommittedId >= erlang:length(do_read_items(Dir, CommittedSegno));
+is_all_consumed(_Dir, _CommittedSegno, _CommittedId, _Segnos) ->
+    false.
 
 ensure_deleted(Filename) ->
     case file:delete(Filename) of

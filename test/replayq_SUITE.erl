@@ -36,7 +36,7 @@ all_cases() ->
 groups() ->
     [
         {queue, [], all_cases()},
-        {ets_exclusive, [], all_cases() },
+        {ets_exclusive, [], all_cases()},
         {ets_shared, [], all_cases() ++ [owner_down_cause_purge]}
     ].
 
