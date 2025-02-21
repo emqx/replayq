@@ -20,13 +20,14 @@
 
 -export([
     new/1,
-    to_list/1,
+    peek_all/1,
     peek/1,
     is_empty/1,
     in/2,
     in_r/2,
     in_batch/2,
-    out/1
+    out/1,
+    destroy/1
 ]).
 
 -export_type([queue/1]).
@@ -37,9 +38,9 @@
 -spec new(_) -> queue(term()).
 new(_) -> queue:new().
 
-%% @doc Convert a queue to a list.
--spec to_list(queue(Term)) -> [Term].
-to_list(Q) -> queue:to_list(Q).
+%% @doc Peek all items from the queue.
+-spec peek_all(queue(Term)) -> [Term].
+peek_all(Q) -> queue:to_list(Q).
 
 %% @doc Peek the front item of the queue.
 -spec peek(queue(Term)) -> empty | {value, Term}.
@@ -70,6 +71,11 @@ in_batch(Items, Q) ->
 %% @doc Dequeue an item from the queue.
 -spec out(queue(Term)) -> {empty, queue(Term)} | {{value, Term}, queue(Term)}.
 out(Q) -> queue:out(Q).
+
+%% @doc Destroy the queue.
+%% This implementation does nothing.
+-spec destroy(queue(_)) -> ok.
+destroy(_Q) -> ok.
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

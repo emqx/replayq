@@ -35,6 +35,7 @@ start_link() ->
 %%------------------------------------------------------------------------------
 
 init([]) ->
+    ok = replayq_mem_ets_shared:boot_init(),
     Registry = worker_spec(replayq_registry),
     SupFlags = #{
         strategy => one_for_one,

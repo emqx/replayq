@@ -20,9 +20,10 @@
 %% API
 -export([
     start_link/0,
-
     register_committer/2,
-    deregister_committer/1
+    deregister_committer/1,
+    register_slot_owner/1,
+    deregister_slot_owner/1
 ]).
 
 %% `gen_server' API
@@ -40,7 +41,8 @@
 %% call/cast/info events
 -record(register_committer, {dir :: string() | binary(), pid :: pid()}).
 -record(deregister_committer, {pid :: pid()}).
-
+-record(register_slot_owner, {pid :: pid()}).
+-record(deregister_slot_owner, {pid :: pid()}).
 %%------------------------------------------------------------------------------
 %% API
 %%------------------------------------------------------------------------------
@@ -56,13 +58,22 @@ register_committer(Dir0, Pid) ->
 deregister_committer(Pid) ->
     gen_server:call(?MODULE, #deregister_committer{pid = Pid}, infinity).
 
+%% @doc Register a slot owner in the global shared queue.
+-spec register_slot_owner(pid()) -> ok | {error, already_registered}.
+register_slot_owner(Pid) ->
+    gen_server:call(?MODULE, #register_slot_owner{pid = Pid}, infinity).
+
+-spec deregister_slot_owner(pid()) -> ok.
+deregister_slot_owner(Pid) ->
+    gen_server:call(?MODULE, #deregister_slot_owner{pid = Pid}, infinity).
+
 %%------------------------------------------------------------------------------
 %% `gen_server' API
 %%------------------------------------------------------------------------------
 
 init(_Opts) ->
     process_flag(trap_exit, true),
-    State = #{committers => #{}},
+    State = #{committers => #{}, slot_owners => #{}},
     {ok, State}.
 
 handle_call(#register_committer{dir = Dir, pid = Pid}, _From, State0) ->
@@ -90,12 +101,34 @@ handle_call(#deregister_committer{pid = Pid}, _From, #{committers := Committers0
             {_, State} = pop_committer(State0, Pid),
             {reply, ok, State}
     end;
+handle_call(#register_slot_owner{pid = Pid}, _From, #{slot_owners := Owners0} = State0) ->
+    case is_map_key(Pid, Owners0) of
+        false ->
+            Ref = erlang:monitor(process, Pid),
+            {reply, ok, State0#{slot_owners := Owners0#{Pid => Ref}}};
+        true ->
+            {reply, {error, already_registered}, State0}
+    end;
+handle_call(#deregister_slot_owner{pid = Pid}, _From, #{slot_owners := Owners0} = State0) ->
+    case maps:get(Pid, Owners0, undefined) of
+        undefined ->
+            {reply, ok, State0};
+        Ref ->
+            erlang:demonitor(Ref, [flush]),
+            {reply, ok, State0#{slot_owners := maps:remove(Pid, Owners0)}}
+    end;
 handle_call(_Call, _From, State) ->
     {reply, {error, unknown_call}, State}.
 
 handle_cast(_Cast, State) ->
     {noreply, State}.
 
+handle_info({'DOWN', _Ref, process, Pid, _Info}, #{slot_owners := Owners0} = State0) when
+    is_map_key(Pid, Owners0)
+->
+    Owners = maps:remove(Pid, Owners0),
+    ok = replayq_mem_ets_shared:purge_by_owner(Pid),
+    {noreply, State0#{slot_owners := Owners}};
 handle_info({'EXIT', Pid, _Reason}, #{committers := Committers0} = State0) when
     is_map_key(Pid, Committers0)
 ->

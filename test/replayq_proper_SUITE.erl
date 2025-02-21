@@ -15,13 +15,26 @@
 %%--------------------------------------------------------------------
 
 -module(replayq_proper_SUITE).
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
 
 -include_lib("proper/include/proper.hrl").
--include_lib("common_test/include/ct.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 all() ->
+    [
+        {group, queue},
+        {group, ets_exclusive},
+        {group, ets_shared}
+    ].
+
+groups() ->
+    [
+        {queue, [], all_cases()},
+        {ets_exclusive, [], all_cases()},
+        {ets_shared, [], all_cases()}
+    ].
+
+all_cases() ->
     [
         F
      || {F, _} <- ?MODULE:module_info(exports),
@@ -31,6 +44,12 @@ all() ->
 is_t_function("t_" ++ _) -> true;
 is_t_function(_) -> false.
 
+init_per_group(Group, Config) ->
+    [{ct_group, Group} | Config].
+
+end_per_group(_Group, _Config) ->
+    ok.
+
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(replayq),
     Config.
@@ -38,43 +57,71 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     ok.
 
-t_run_persistent(_Config) ->
-    Opts = [{numtests, 1000}, {to_file, user}],
-    true = proper:quickcheck(prop_run(false), Opts).
+get_mem_queue_module(Config) ->
+    case proplists:get_value(ct_group, Config) of
+        queue -> replayq_mem_queue;
+        ets_exclusive -> replayq_mem_ets_exclusive;
+        ets_shared -> replayq_mem_ets_shared
+    end.
 
-t_run_offload(_Config) ->
+t_run_persistent(Config) ->
+    MemQueueModule = get_mem_queue_module(Config),
     Opts = [{numtests, 1000}, {to_file, user}],
-    true = proper:quickcheck(prop_run(true), Opts).
+    true = proper:quickcheck(prop_run(MemQueueModule, false), Opts).
 
-prop_run(IsOffload) ->
+t_run_offload(Config) ->
+    MemQueueModule = get_mem_queue_module(Config),
+    Opts = [{numtests, 1000}, {to_file, user}],
+    true = proper:quickcheck(prop_run(MemQueueModule, true), Opts).
+
+prop_run(MemQueueModule, IsOffload) ->
+    F = fun() ->
+        receive
+            _ -> ok
+        end
+    end,
+    MQOwner = spawn_link(F),
+    DQOwner = spawn_link(F),
     ?FORALL(
         {SegBytes, OpList},
         {prop_seg_bytes(), prop_op_list(IsOffload)},
         begin
             Dir = filename:join([data_dir(), integer_to_list(erlang:system_time())]),
-            MQ = replayq:open(#{mem_only => true}),
-            Cfg = #{dir => Dir, seg_bytes => SegBytes, offload => IsOffload},
-            DQ = replayq:open(Cfg),
+            MQCfg = #{
+                mem_only => true,
+                mem_queue_module => MemQueueModule,
+                mem_queue_opts => #{owner => MQOwner}
+            },
+            MQ = replayq:open(MQCfg),
+            DQCfg = #{
+                dir => Dir,
+                seg_bytes => SegBytes,
+                offload => IsOffload,
+                mem_queue_module => MemQueueModule,
+                mem_queue_opts => #{owner => DQOwner}
+            },
+            DQ = replayq:open(DQCfg),
             try
-                ok = apply_ops(MQ, DQ, OpList, Cfg),
+                ok = apply_ops(MQ, DQ, OpList, MQCfg, DQCfg),
                 true
             after
+                replayq:close(MQ),
                 replayq:close(DQ),
                 ok = delete_dir(Dir)
             end
         end
     ).
 
-apply_ops(MQ, DQ, [], _) ->
+apply_ops(MQ, DQ, [], _MQCfg, _DQCfg) ->
     ok = compare(MQ, DQ);
-apply_ops(MQ0, DQ0, [Op | Rest], Cfg) ->
-    {MQ, DQ} = apply_op(MQ0, DQ0, Op, Cfg),
+apply_ops(MQ0, DQ0, [Op | Rest], MQCfg, DQCfg) ->
+    {MQ, DQ} = apply_op(MQ0, DQ0, Op, MQCfg, DQCfg),
     ok = compare_stats(MQ, DQ),
-    apply_ops(MQ, DQ, Rest, Cfg).
+    apply_ops(MQ, DQ, Rest, MQCfg, DQCfg).
 
-apply_op(MQ0, DQ0, {append, Items}, _Cfg) ->
+apply_op(MQ0, DQ0, {append, Items}, _MQCfg, _DQCfg) ->
     {replayq:append(MQ0, Items), replayq:append(DQ0, Items)};
-apply_op(MQ0, DQ0, {pop_ack, {Bytes, Count}}, _Cfg) ->
+apply_op(MQ0, DQ0, {pop_ack, {Bytes, Count}}, _MQCfg, _DQCfg) ->
     Opts = #{bytes_limit => Bytes, count_limit => Count},
     {MQ, AckRef1, Items1} = replayq:pop(MQ0, Opts),
     {DQ, AckRef2, Items2} = replayq:pop(DQ0, Opts),
@@ -82,10 +129,13 @@ apply_op(MQ0, DQ0, {pop_ack, {Bytes, Count}}, _Cfg) ->
     ok = replayq:ack_sync(MQ, AckRef1),
     ok = replayq:ack_sync(DQ, AckRef2),
     {MQ, DQ};
-apply_op(MQ, DQ0, reopen, Cfg) ->
-    ok = replayq:close(MQ),
+apply_op(MQ0, DQ0, reopen, MQCfg, DQCfg) ->
+    All = dump(MQ0),
+    ok = replayq:close(MQ0),
+    MQ1 = replayq:open(MQCfg),
+    MQ = replayq:append(MQ1, All),
     ok = replayq:close(DQ0),
-    DQ = replayq:open(Cfg),
+    DQ = replayq:open(DQCfg),
     {MQ, DQ}.
 
 data_dir() -> filename:join(["./test-data", "prop-tests"]).
@@ -129,3 +179,9 @@ compare(Q1, Q2) ->
         true -> compare(NewQ1, NewQ2);
         false -> throw({diff, {Items1, NewQ1}, {Items2, NewQ2}})
     end.
+
+%% dump all items in the queue
+dump(Q) ->
+    Count = replayq:count(Q),
+    {_, _, All} = replayq:pop(Q, #{count_limit => Count + 1}),
+    All.

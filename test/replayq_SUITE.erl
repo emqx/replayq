@@ -15,16 +15,36 @@
 %%--------------------------------------------------------------------
 
 -module(replayq_SUITE).
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
 
 -include_lib("eunit/include/eunit.hrl").
 
 all() ->
     [
+        {group, queue},
+        {group, ets_exclusive},
+        {group, ets_shared}
+    ].
+
+all_cases() ->
+    [
         F
      || {F, _} <- ?MODULE:module_info(exports),
         is_t_function(atom_to_list(F))
     ].
+
+groups() ->
+    [
+        {queue, [], all_cases()},
+        {ets_exclusive, [], all_cases()},
+        {ets_shared, [], all_cases() ++ [owner_down_cause_purge]}
+    ].
+
+init_per_group(Group, Config) ->
+    [{ct_group, Group} | Config].
+
+end_per_group(_Group, _Config) ->
+    ok.
 
 is_t_function("t_" ++ _) -> true;
 is_t_function(_) -> false.
@@ -40,37 +60,37 @@ end_per_suite(_Config) ->
     ok.
 
 %% the very first run
-t_init(_Config) ->
+t_init(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 100},
-    Q1 = replayq:open(Config),
+    Q1 = open(CtConfig, Config),
     ?assertEqual(0, replayq:count(Q1)),
     ?assertEqual(0, replayq:bytes(Q1)),
     ok = replayq:close(Q1),
-    Q2 = replayq:open(Config),
+    Q2 = open(CtConfig, Config),
     ?assertEqual(0, replayq:count(Q2)),
     ?assertEqual(0, replayq:bytes(Q2)),
     ok = replayq:close(Q2),
     ok = cleanup(Dir).
 
-t_reopen(_Config) ->
+t_reopen(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 100},
-    Q0 = replayq:open(Config),
+    Q0 = open(CtConfig, Config),
     Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
     ok = replayq:close(Q1),
-    Q2 = replayq:open(Config),
+    Q2 = open(CtConfig, Config),
     ?assertEqual(2, replayq:count(Q2)),
     ?assertEqual(10, replayq:bytes(Q2)),
     ok = cleanup(Dir).
 
-t_volatile(_Config) ->
+t_volatile(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 100},
-    Q0 = replayq:open(Config),
+    Q0 = open(CtConfig, Config),
     Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
     ok = replayq:close(Q1),
-    Q2 = replayq:open(Config#{offload => {true, volatile}}),
+    Q2 = open(CtConfig, Config#{offload => {true, volatile}}),
     ?assertEqual(0, replayq:count(Q2)),
     ?assertEqual(0, replayq:bytes(Q2)),
     {Q3, _QAckRef, Items} = replayq:pop(Q2, #{count_limit => 10}),
@@ -80,10 +100,10 @@ t_volatile(_Config) ->
 
 %% when popping from in-mem segment, the segment size stats may overflow
 %% but not consuming as much memory
-t_offload_in_mem_seg_overflow(_Config) ->
+t_offload_in_mem_seg_overflow(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 11, offload => true},
-    Q0 = replayq:open(Config),
+    Q0 = open(CtConfig, Config),
     % in mem, one byte left
     Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
     % not offloading to disk yet
@@ -99,10 +119,10 @@ t_offload_in_mem_seg_overflow(_Config) ->
     ok = replayq:close(Q3),
     ok = cleanup(Dir).
 
-t_offload_file(_Config) ->
+t_offload_file(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 10, offload => true},
-    Q0 = replayq:open(Config),
+    Q0 = open(CtConfig, Config),
     % in mem
     Q1 = replayq:append(Q0, [<<"item1">>]),
     ?assertMatch([], list_segments(Dir)),
@@ -131,10 +151,10 @@ t_offload_file(_Config) ->
     ok = replayq:close(Q7),
     ok = cleanup(Dir).
 
-t_offload_reopen(_Config) ->
+t_offload_reopen(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 100, offload => true},
-    Q0 = replayq:open(Config),
+    Q0 = open(CtConfig, Config),
     Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
     ?assertMatch(#{w_cur := #{fd := no_fd}}, Q1),
     % should be filtered out
@@ -142,7 +162,7 @@ t_offload_reopen(_Config) ->
     {Q2, _AckRef, Items} = replayq:pop(Q1, #{count_limit => 1}),
     ?assertEqual([<<"item1">>], Items),
     ok = replayq:close(Q2),
-    Q3 = replayq:open(Config),
+    Q3 = open(CtConfig, Config),
     ?assertEqual(2, replayq:count(Q3)),
     ?assertEqual(10, replayq:bytes(Q3)),
     {Q4, AckRef1, Items1} = replayq:pop(Q3, #{count_limit => 2}),
@@ -150,15 +170,15 @@ t_offload_reopen(_Config) ->
     ?assertEqual([filename(1), filename(2)], list_segments(Dir)),
     ok = replayq:ack_sync(Q4, AckRef1),
     ok = replayq:close(Q4),
-    Q5 = replayq:open(Config),
+    Q5 = open(CtConfig, Config),
     ?assertEqual(0, replayq:count(Q5)),
     ?assertEqual(0, replayq:bytes(Q5)),
     ok = cleanup(Dir).
 
-t_reopen_v0(_Config) ->
+t_reopen_v0(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 1000},
-    Q0 = replayq:open(Config),
+    Q0 = open(CtConfig, Config),
     % inspect the opaque internal structure for test
     #{w_cur := #{fd := Fd}} = Q0,
     % append a version-0 item
@@ -166,7 +186,7 @@ t_reopen_v0(_Config) ->
     % append a version-1 itme
     Q2 = replayq:append(Q0, [<<"item2">>]),
     ok = replayq:close(Q2),
-    Q3 = replayq:open(Config),
+    Q3 = open(CtConfig, Config),
     {Q4, _AckRef, Items} = replayq:pop(Q3, #{count_limit => 3}),
     %% do not expect item3 because it was appended to a corrupted tail
     ?assertEqual([<<"item1">>, <<"item2">>], Items),
@@ -174,12 +194,12 @@ t_reopen_v0(_Config) ->
     ok = replayq:close(Q4),
     ok = cleanup(Dir).
 
-t_append_pop_disk_default_marshaller(_Config) ->
+t_append_pop_disk_default_marshaller(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 1},
-    test_append_pop_disk(Config).
+    test_append_pop_disk(CtConfig, Config).
 
-t_append_pop_disk_my_marshaller(_Config) ->
+t_append_pop_disk_my_marshaller(CtConfig) ->
     Dir = ?DIR,
     Config = #{
         dir => Dir,
@@ -190,10 +210,10 @@ t_append_pop_disk_my_marshaller(_Config) ->
             (I) -> <<"mmp", I/binary>>
         end
     },
-    test_append_pop_disk(Config).
+    test_append_pop_disk(CtConfig, Config).
 
-test_append_pop_disk(#{dir := Dir} = Config) ->
-    Q0 = replayq:open(Config),
+test_append_pop_disk(CtConfig, #{dir := Dir} = Config) ->
+    Q0 = open(CtConfig, Config),
     Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
     Q2 = replayq:append(Q1, [<<"item3">>]),
     ?assertEqual(<<"item1">>, replayq:peek(Q2)),
@@ -205,7 +225,7 @@ test_append_pop_disk(#{dir := Dir} = Config) ->
     %% stop without acking
     ok = replayq:close(Q3),
     %% open again expect to receive the same items
-    Q4 = replayq:open(Config),
+    Q4 = open(CtConfig, Config),
     {Q5, AckRef1, Items1} = replayq:pop(Q4, #{
         count_limit => 5,
         bytes_limit => 1000
@@ -214,7 +234,7 @@ test_append_pop_disk(#{dir := Dir} = Config) ->
     ?assertEqual(Items, Items1),
     lists:foreach(fun(_) -> ok = replayq:ack(Q5, AckRef) end, lists:seq(1, 100)),
     ok = replayq:close(Q5),
-    Q6 = replayq:open(Config),
+    Q6 = open(CtConfig, Config),
     ?assert(replayq:is_empty(Q6)),
     ?assertEqual(empty, replayq:peek(Q6)),
     ?assertEqual({Q6, nothing_to_ack, []}, replayq:pop(Q6, #{})),
@@ -222,11 +242,11 @@ test_append_pop_disk(#{dir := Dir} = Config) ->
     ok = replayq:close(Q6),
     ok = cleanup(Dir).
 
-t_append_pop_mem_default_marshaller(_Config) ->
+t_append_pop_mem_default_marshaller(CtConfig) ->
     Config = #{mem_only => true},
-    test_append_pop_mem(Config).
+    test_append_pop_mem(CtConfig, Config).
 
-t_append_pop_mem_my_marshaller(_Config) ->
+t_append_pop_mem_my_marshaller(CtConfig) ->
     Config = #{
         mem_only => true,
         sizer => fun(Item) -> size(Item) end,
@@ -235,10 +255,10 @@ t_append_pop_mem_my_marshaller(_Config) ->
             (I) -> <<"mmp", I/binary>>
         end
     },
-    test_append_pop_mem(Config).
+    test_append_pop_mem(CtConfig, Config).
 
-test_append_pop_mem(Config) ->
-    Q0 = replayq:open(Config),
+test_append_pop_mem(CtConfig, Config) ->
+    Q0 = open(CtConfig, Config),
     Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
     Q2 = replayq:append(Q1, [<<"item3">>]),
     ?assertEqual(<<"item1">>, replayq:peek(Q2)),
@@ -250,7 +270,7 @@ test_append_pop_mem(Config) ->
     %% stop without acking
     ok = replayq:close(Q3),
     %% open again expect to receive the same items
-    Q4 = replayq:open(Config),
+    Q4 = open(CtConfig, Config),
     {Q5, _AckRef1, _Items1} =
         replayq:pop(Q4, #{count_limit => 5, bytes_limit => 1000}),
     ?assertEqual(empty, replayq:peek(Q5)),
@@ -258,7 +278,7 @@ test_append_pop_mem(Config) ->
     ok = replayq:ack(Q5, nothing_to_ack),
     ok = replayq:close(Q5).
 
-t_append_max_total_bytes_mem(_Config) ->
+t_append_max_total_bytes_mem(CtConfig) ->
     Config = #{
         mem_only => true,
         sizer => fun(Item) -> size(Item) end,
@@ -268,10 +288,10 @@ t_append_max_total_bytes_mem(_Config) ->
         end,
         max_total_bytes => 10
     },
-    test_append_max_total_bytes(Config),
+    test_append_max_total_bytes(CtConfig, Config),
     ok.
 
-t_append_max_total_bytes_disk(_Config) ->
+t_append_max_total_bytes_disk(CtConfig) ->
     Dir = ?DIR,
     Config = #{
         dir => Dir,
@@ -283,11 +303,11 @@ t_append_max_total_bytes_disk(_Config) ->
         end,
         max_total_bytes => 10
     },
-    test_append_max_total_bytes(Config),
+    test_append_max_total_bytes(CtConfig, Config),
     ok = cleanup(Dir).
 
-test_append_max_total_bytes(Config) ->
-    Q0 = replayq:open(Config),
+test_append_max_total_bytes(CtConfig, Config) ->
+    Q0 = open(CtConfig, Config),
     ?assertEqual(-10, replayq:overflow(Q0)),
     Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>, <<"item3">>, <<"item4">>]),
     ?assertEqual(10, replayq:overflow(Q1)),
@@ -295,18 +315,18 @@ test_append_max_total_bytes(Config) ->
     ?assertEqual(0, replayq:overflow(Q2)),
     ok = replayq:close(Q2).
 
-t_pop_limit_disk(_Config) ->
+t_pop_limit_disk(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 1},
-    ok = test_pop_limit(Config),
+    ok = test_pop_limit(CtConfig, Config),
     ok = cleanup(Dir).
 
-t_pop_limit_mem(_Config) ->
+t_pop_limit_mem(CtConfig) ->
     Config = #{mem_only => true},
-    ok = test_pop_limit(Config).
+    ok = test_pop_limit(CtConfig, Config).
 
-test_pop_limit(Config) ->
-    Q0 = replayq:open(Config),
+test_pop_limit(CtConfig, Config) ->
+    Q0 = open(CtConfig, Config),
     Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
     Q2 = replayq:append(Q1, [<<"item3">>]),
     {Q3, _AckRef1, Items1} = replayq:pop(Q2, #{
@@ -321,10 +341,10 @@ test_pop_limit(Config) ->
     ?assertEqual([<<"item2">>], Items2),
     ok = replayq:close(Q4).
 
-t_commit_in_the_middle(_Config) ->
+t_commit_in_the_middle(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 1000},
-    Q0 = replayq:open(Config),
+    Q0 = open(CtConfig, Config),
     Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
     Q2 = replayq:append(Q1, [<<"item3">>]),
     {Q3, AckRef1, Items1} = replayq:pop(Q2, #{count_limit => 1}),
@@ -335,7 +355,7 @@ t_commit_in_the_middle(_Config) ->
     ?assertEqual(2, replayq:count(Q3)),
     ?assertEqual([<<"item1">>], Items1),
     ok = replayq:close(Q3),
-    Q4 = replayq:open(Config),
+    Q4 = open(CtConfig, Config),
     {Q5, _AckRef2, Items2} = replayq:pop(Q4, #{count_limit => 1}),
     ?assertEqual([<<"item2">>], Items2),
     ?assertEqual(1, replayq:count(Q5)),
@@ -343,12 +363,12 @@ t_commit_in_the_middle(_Config) ->
     ok = replayq:close(Q5),
     ok = cleanup(Dir).
 
-t_first_segment_corrupted(_Config) ->
+t_first_segment_corrupted(CtConfig) ->
     Dir = ?DIR,
     SegBytes = 10,
     Config = #{dir => Dir, seg_bytes => SegBytes},
     Item = iolist_to_binary(lists:duplicate(SegBytes, "a")),
-    Q0 = replayq:open(Config),
+    Q0 = open(CtConfig, Config),
     ok = corrupt(Q0),
     %% to the first (corrputed) segment
     Q1 = replayq:append(Q0, [Item]),
@@ -358,7 +378,7 @@ t_first_segment_corrupted(_Config) ->
     ?assertMatch(#{head_segno := 1, w_cur := #{segno := 3}}, Q2),
     replayq:close(Q2),
     %% reopen to discover that the first segment is corrupted
-    Q3 = replayq:open(Config),
+    Q3 = open(CtConfig, Config),
     ?assertEqual(1, replayq:count(Q3)),
     {Q4, _AckRef, Items} = replayq:pop(Q3, #{count_limit => 3}),
     ?assertEqual([Item], Items),
@@ -366,12 +386,12 @@ t_first_segment_corrupted(_Config) ->
     ok = replayq:close(Q4),
     ok = cleanup(Dir).
 
-t_second_segment_corrupted(_Config) ->
+t_second_segment_corrupted(CtConfig) ->
     Dir = ?DIR,
     SegBytes = 10,
     Config = #{dir => Dir, seg_bytes => SegBytes},
     Item = iolist_to_binary(lists:duplicate(SegBytes, "a")),
-    Q0 = replayq:open(Config),
+    Q0 = open(CtConfig, Config),
     %% to the first segment
     Q1 = replayq:append(Q0, [Item]),
     ok = corrupt(Q1),
@@ -383,7 +403,7 @@ t_second_segment_corrupted(_Config) ->
     ?assertMatch(#{head_segno := 1, w_cur := #{segno := 4}}, Q3),
     replayq:close(Q3),
     %% reopen to discover that the second segment is corrupted
-    Q4 = replayq:open(Config),
+    Q4 = open(CtConfig, Config),
     ?assertEqual(2, replayq:count(Q4)),
     {Q5, _AckRef, Items} = replayq:pop(Q4, #{count_limit => 3}),
     ?assertEqual([Item, Item], Items),
@@ -391,12 +411,12 @@ t_second_segment_corrupted(_Config) ->
     ok = replayq:close(Q5),
     ok = cleanup(Dir).
 
-t_last_segment_corrupted(_Config) ->
+t_last_segment_corrupted(CtConfig) ->
     Dir = ?DIR,
     SegBytes = 10,
     Config = #{dir => Dir, seg_bytes => SegBytes},
     Item = iolist_to_binary(lists:duplicate(SegBytes, "a")),
-    Q0 = replayq:open(Config),
+    Q0 = open(CtConfig, Config),
     %% to the first segment
     Q1 = replayq:append(Q0, [Item]),
     %% to the second segment
@@ -406,7 +426,7 @@ t_last_segment_corrupted(_Config) ->
     Q3 = replayq:append(Q2, [<<"thridsegment">>]),
     replayq:close(Q3),
     %% reopen to discover that the third segment is corrupted
-    Q4 = replayq:open(Config),
+    Q4 = open(CtConfig, Config),
     ?assertEqual(2, replayq:count(Q4)),
     {Q5, _AckRef, Items} = replayq:pop(Q4, #{count_limit => 3}),
     ?assertEqual([Item, Item], Items),
@@ -418,22 +438,22 @@ t_last_segment_corrupted(_Config) ->
     replayq:ack(Q7, AckRef),
     ok = replayq:close(Q7),
     %% try to open again to check size
-    Q8 = replayq:open(Config),
+    Q8 = open(CtConfig, Config),
     ?assert(replayq:is_empty(Q8)),
     replayq:ack(Q7, AckRef),
     ok = cleanup(Dir).
 
-t_corrupted_segment(_Config) ->
-    ?assert(test_corrupted_segment(<<"foo">>)),
-    ?assert(test_corrupted_segment(<<0:8, 0:32, 1:32, 1:8>>)),
-    ?assert(test_corrupted_segment(<<0:8, 0:32, 0:32, "randomtail">>)),
-    ?assert(test_corrupted_segment(<<1:8, 0:32, 1:32, 1:8>>)),
-    ?assert(test_corrupted_segment(<<1:8, 841265288:32, 0:32, 1:32, 1:8>>)).
+t_corrupted_segment(CtConfig) ->
+    ?assert(test_corrupted_segment(CtConfig, <<"foo">>)),
+    ?assert(test_corrupted_segment(CtConfig, <<0:8, 0:32, 1:32, 1:8>>)),
+    ?assert(test_corrupted_segment(CtConfig, <<0:8, 0:32, 0:32, "randomtail">>)),
+    ?assert(test_corrupted_segment(CtConfig, <<1:8, 0:32, 1:32, 1:8>>)),
+    ?assert(test_corrupted_segment(CtConfig, <<1:8, 841265288:32, 0:32, 1:32, 1:8>>)).
 
-test_corrupted_segment(BadBytes) ->
+test_corrupted_segment(CtConfig, BadBytes) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 1000},
-    Q0 = replayq:open(Config),
+    Q0 = open(CtConfig, Config),
     Item2 = <<>>,
     Q1 = replayq:append(Q0, [<<"item1">>, Item2]),
     % inspect the opaque internal structure for test
@@ -442,7 +462,7 @@ test_corrupted_segment(BadBytes) ->
     file:write(Fd, BadBytes),
     Q2 = replayq:append(Q0, [<<"item3">>]),
     ok = replayq:close(Q2),
-    Q3 = replayq:open(Config),
+    Q3 = open(CtConfig, Config),
     {Q4, _AckRef, Items} = replayq:pop(Q3, #{count_limit => 3}),
     %% do not expect item3 because it was appended to a corrupted tail
     ?assertEqual([<<"item1">>, Item2], Items),
@@ -451,10 +471,10 @@ test_corrupted_segment(BadBytes) ->
     ok = cleanup(Dir),
     true.
 
-t_comitter_crash(_Config) ->
+t_comitter_crash(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 1000},
-    #{committer := Committer} = replayq:open(Config),
+    #{committer := Committer} = open(CtConfig, Config),
     erlang:process_flag(trap_exit, true),
     Committer ! <<"foo">>,
     receive
@@ -464,21 +484,21 @@ t_comitter_crash(_Config) ->
 
 %% Checks that our spawned committer can register a name for itself when using filepaths
 %% larger than 255 bytes.
-t_huge_filepath(_Config) ->
+t_huge_filepath(CtConfig) ->
     Dir0 = ?DIR,
     Dir = filename:join(Dir0, binary:copy(<<"a">>, 255)),
     Config = #{dir => Dir, seg_bytes => 1000},
-    Q = #{committer := Committer} = replayq:open(Config),
+    Q = #{committer := Committer} = open(CtConfig, Config),
     ?assert(is_process_alive(Committer)),
     replayq:close(Q),
     ok.
 
 %% Checks that we don't allow having the same directory open by multiple replayqs.
-t_same_directory_committer_clash(_Config) ->
+t_same_directory_committer_clash(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 1000},
-    Q1 = replayq:open(Config),
-    try replayq:open(Config) of
+    Q1 = open(CtConfig, Config),
+    try open(CtConfig, Config) of
         Q2 -> error({"should not allow opening a second replayq", Q2})
     catch
         error:{badmatch, {error, already_registered}} ->
@@ -487,36 +507,36 @@ t_same_directory_committer_clash(_Config) ->
     replayq:close(Q1),
     ok.
 
-t_is_mem_only_mem(_Config) ->
-    Q = replayq:open(#{mem_only => true}),
+t_is_mem_only_mem(CtConfig) ->
+    Q = open(CtConfig, #{mem_only => true}),
     true = replayq:is_mem_only(Q),
     ok = replayq:close(Q).
 
-t_is_mem_only_disk(_Config) ->
+t_is_mem_only_disk(CtConfig) ->
     Config = #{dir => ?DIR, seg_bytes => 100},
-    Q = replayq:open(Config),
+    Q = open(CtConfig, Config),
     false = replayq:is_mem_only(Q),
     ok = replayq:close(Q).
 
-t_stop_before_mem(_Config) ->
+t_stop_before_mem(CtConfig) ->
     Config = #{mem_only => true},
-    stop_before_test(Config),
-    stop_before_readme_example_test(Config).
+    stop_before_test(CtConfig, Config),
+    stop_before_readme_example_test(CtConfig, Config).
 
-t_stop_before_disk(_Config) ->
+t_stop_before_disk(CtConfig) ->
     Config1 = #{
         dir => ?DIR,
         seg_bytes => 100
     },
-    stop_before_test(Config1),
+    stop_before_test(CtConfig, Config1),
     Config2 = #{
         dir => filename:join([?DIR, "example"]),
         seg_bytes => 100
     },
-    stop_before_readme_example_test(Config2).
+    stop_before_readme_example_test(CtConfig, Config2).
 
-stop_before_test(Config) ->
-    Q0 = replayq:open(Config),
+stop_before_test(CtConfig, Config) ->
+    Q0 = open(CtConfig, Config),
     Q1 = replayq:append(Q0, [<<"1">>, <<"2">>, <<"3">>, <<"4">>, <<"5">>]),
     StopBeforeFun =
         fun
@@ -540,8 +560,8 @@ stop_before_test(Config) ->
     ok = replayq:close(Q2).
 
 %% Test that the example in the readme file works
-stop_before_readme_example_test(Config) ->
-    Q0 = replayq:open(Config),
+stop_before_readme_example_test(CtConfig, Config) ->
+    Q0 = open(CtConfig, Config),
     Q1 = replayq:append(
         Q0,
         [
@@ -584,10 +604,10 @@ stop_before_readme_example_test(Config) ->
     ok = replayq:ack(Q5, AckRef4),
     ok = replayq:close(Q5).
 
-t_corrupted_commit(_Config) ->
+t_corrupted_commit(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 1000},
-    Q0 = replayq:open(Config),
+    Q0 = open(CtConfig, Config),
     Q1 = replayq:append(Q0, [<<"item1">>]),
     {Q2, AckRef, _} = replayq:pop(Q1, #{count_limit => 3}),
     ok = replayq:ack_sync(Q2, AckRef),
@@ -597,55 +617,99 @@ t_corrupted_commit(_Config) ->
 
     ok = file:write_file(CommitFile, <<>>),
     %% assert no crash
-    Q3 = replayq:open(Config),
+    Q3 = open(CtConfig, Config),
     ok = replayq:close(Q3),
 
     ok = file:write_file(CommitFile, <<"bad-erlang-term">>),
     %% assert no crash
-    Q4 = replayq:open(Config),
+    Q4 = open(CtConfig, Config),
     ok = replayq:close(Q4),
     ok = cleanup(Dir).
 
-t_pop_at_least_bytes_mem(_Config) ->
+t_pop_bytes_mem(CtConfig) ->
     Config = #{
         mem_only => true,
         seg_bytes => 1000,
         sizer => fun(Item) -> size(Item) end
     },
-    test_pop_at_least_bytes(Config).
+    ok = test_pop_bytes(CtConfig, Config, default),
+    ok = test_pop_bytes(CtConfig, Config, at_most),
+    ok = test_pop_bytes(CtConfig, Config, at_least),
+    ok.
 
-t_pop_at_least_bytes_disk(_Config) ->
+t_pop_bytes_disk(CtConfig) ->
     Dir = ?DIR,
     Config = #{
         dir => Dir,
         seg_bytes => 1000,
         sizer => fun(Item) -> size(Item) end
     },
-    test_pop_at_least_bytes(Config),
+    ok = test_pop_bytes(CtConfig, Config, default),
+    ok = cleanup(Dir),
+    ok = test_pop_bytes(CtConfig, Config, at_most),
+    ok = cleanup(Dir),
+    ok = test_pop_bytes(CtConfig, Config, at_least),
     ok = cleanup(Dir).
 
-test_pop_at_least_bytes(Config) ->
-    Q0 = replayq:open(Config),
+test_pop_bytes(CtConfig, Config, BytesMode) ->
+    Q0 = open(CtConfig, Config),
     %% Two 5 bytes elements
     Item1 = <<"12345">>,
     Item2 = <<"67890">>,
     Q1 = replayq:append(Q0, [Item1, Item2]),
     ItemSize = 5,
     ?assertEqual(ItemSize * 2, replayq:bytes(Q1)),
-    %% Default behavior: we pop _at most_ N bytes, and return at least 1 item, if any.
-    %% Asking for less bytes than the 2 elements should yield singleton batch.
-    {_Q2, _Ack2, [Item1]} = replayq:pop(Q1, #{count_limit => 10, bytes_limit => ItemSize - 1}),
-    {_Q3, _Ack3, [Item1]} = replayq:pop(Q1, #{
-        count_limit => 10, bytes_limit => {at_most, ItemSize - 1}
+    case BytesMode of
+        default ->
+            %% Default behavior: we pop _at most_ N bytes, and return at least 1 item, if any.
+            %% Asking for less bytes than the 2 elements should yield singleton batch.
+            ?assertEqual([Item1], spop(Q1, #{count_limit => 10, bytes_limit => ItemSize - 1}));
+        at_most ->
+            ?assertEqual(
+                [Item1], spop(Q1, #{count_limit => 10, bytes_limit => {at_most, ItemSize - 1}})
+            );
+        at_least ->
+            %% ... but dropping _at least_ less bytes than 1 item should drop both of them.
+            ?assertEqual(
+                [Item1, Item2],
+                spop(Q1, #{count_limit => 10, bytes_limit => {at_least, ItemSize + 1}})
+            )
+    end,
+    ok = replayq:close(Q0),
+    ok.
+
+owner_down_cause_purge(CtConfig) ->
+    {Owner, Ref} = spawn_monitor(fun() ->
+        receive
+            stop -> ok
+        end
+    end),
+    Q = open(CtConfig, #{
+        mem_only => true,
+        mem_queue_module => replayq_mem_ets_shared,
+        mem_queue_opts => #{owner => Owner}
     }),
-    %% ... but dropping _at least_ less bytes than 1 item should drop both of them.
-    {Q4, _Ack4, [Item1, Item2]} =
-        replayq:pop(Q1, #{count_limit => 10, bytes_limit => {at_least, ItemSize + 1}}),
-    ?assertEqual(0, replayq:bytes(Q4)),
-    ok = replayq:close(Q4),
+    Q1 = replayq:append(Q, [<<"item1">>]),
+    ?assertEqual(1, replayq:count(Q1)),
+    ?assertEqual(<<"item1">>, replayq:peek(Q1)),
+    Owner ! stop,
+    receive
+        {'DOWN', Ref, process, Owner, _Reason} ->
+            ok
+    end,
+    _ = sys:get_state(replayq_registry),
+    %% the counter is still kept in the Q1 term
+    ?assertEqual(1, replayq:count(Q1)),
+    %% but the queue is empty
+    ?assertEqual(empty, replayq:peek(Q1)),
     ok.
 
 %% helpers ===========================================================
+
+%% simple-pop: pop the queue and return the items
+spop(Q, Opts) ->
+    {_Q1, _AckRef, Items} = replayq:pop(Q, Opts),
+    Items.
 
 cleanup(Dir) ->
     Files = list_segments(Dir),
@@ -672,6 +736,15 @@ filename(Segno) ->
 %% corrupt the segment
 corrupt(#{w_cur := #{fd := Fd}}) ->
     file:write(Fd, "some random bytes").
+
+open(CtConfig, Config0) ->
+    Config =
+        case proplists:get_value(ct_group, CtConfig) of
+            queue -> Config0;
+            ets_exclusive -> Config0#{mem_queue_module => replayq_mem_ets_exclusive};
+            ets_shared -> Config0#{mem_queue_module => replayq_mem_ets_shared}
+        end,
+    replayq:open(Config).
 
 %%%_* Emacs ====================================================================
 %%% Local Variables:

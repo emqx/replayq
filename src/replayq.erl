@@ -57,8 +57,11 @@
     max_total_bytes => bytes(),
     offload => boolean() | {true, volatile},
     sizer => sizer(),
-    marshaller => marshaller()
+    marshaller => marshaller(),
+    mem_queue_module => module(),
+    mem_queue_opts => map()
 }.
+
 %% writer cursor
 -define(NO_FD, no_fd).
 -type w_cur() :: #{
@@ -126,6 +129,7 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
     IsVolatile = is_volatile_mode(Config),
     MemQueueModule = get_mem_queue_module(Config),
     MemQueueOpts = get_mem_queue_opts(Config),
+    InMem = replayq_mem:new(MemQueueModule, MemQueueOpts),
     Q =
         case delete_consumed_and_list_rest(Dir, IsVolatile) of
             [] ->
@@ -135,7 +139,7 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
                     w_cur => init_writer(Dir, empty, IsOffload),
                     committer => spawn_committer(?FIRST_SEGNO, Dir),
                     head_segno => ?FIRST_SEGNO,
-                    in_mem => replayq_mem:new(MemQueueModule, MemQueueOpts)
+                    in_mem => InMem
                 };
             Segs ->
                 LastSegno = lists:last(Segs),
@@ -147,7 +151,7 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
                     w_cur => init_writer(Dir, LastSegno, IsOffload),
                     committer => spawn_committer(hd(Segs), Dir),
                     head_segno => hd(Segs),
-                    in_mem => replayq_mem:from_list(MemQueueModule, MemQueueOpts, HeadItems)
+                    in_mem => replayq_mem:in_batch(MemQueueModule, HeadItems, InMem)
                 }
         end,
     Q#{
@@ -159,18 +163,19 @@ open(#{dir := Dir, seg_bytes := _} = Config) ->
     }.
 
 -spec close(q() | w_cur()) -> ok | {error, any()}.
-close(#{config := mem_only}) ->
-    ok;
-close(#{w_cur := W_Cur, committer := Pid} = Q) ->
+close(#{config := mem_only, in_mem := InMem, mem_queue_module := MemQueueModule}) ->
+    ok = replayq_mem:destroy(MemQueueModule, InMem);
+close(#{w_cur := W_Cur, committer := Pid, in_mem := InMem, mem_queue_module := MemQueueModule} = Q) ->
     MRef = erlang:monitor(process, Pid),
-    Pid ! ?STOP,
     unlink(Pid),
+    Pid ! ?STOP,
     receive
         {'DOWN', MRef, process, Pid, _Reason} ->
             ok
     end,
     ok = maybe_dump_back_to_disk(Q),
     Res = do_close(W_Cur),
+    ok = replayq_mem:destroy(MemQueueModule, InMem),
     ok = replayq_registry:deregister_committer(self()),
     Res.
 
@@ -193,7 +198,7 @@ dump_back_to_disk(#{
     mem_queue_module := MemQueueModule
 }) ->
     IoData0 = get_unacked(process_info(self(), dictionary), ReaderSegno, Marshaller),
-    Items1 = replayq_mem:to_list(MemQueueModule, InMem),
+    Items1 = replayq_mem:peek_all(MemQueueModule, InMem),
     IoData1 = lists:map(fun(?DISK_CP_ITEM(_, _, I)) -> make_iodata(I, Marshaller) end, Items1),
     %% ensure old segment file is deleted
     ok = ensure_deleted(filename(Dir, ReaderSegno)),
@@ -231,8 +236,10 @@ do_get_unacked([{_, Items} | Rest], Marshaller) ->
         | do_get_unacked(Rest, Marshaller)
     ].
 
+%% @doc Append items to the rear of the queue.
 -spec append(q(), [item()]) -> q().
 append(Q, []) ->
+    %% micro-optimization for empty list
     Q;
 append(
     #{
@@ -398,10 +405,8 @@ transform(Id, [Item0 | Rest], Sizer, Count, Bytes, Acc) ->
         end,
     transform(NextId, Rest, Sizer, Count + 1, Bytes + Size, [Item | Acc]).
 
-append_in_mem(_, [], Q) ->
-    Q;
-append_in_mem(MemQueueModule, [Item | Rest], Q) ->
-    append_in_mem(MemQueueModule, Rest, replayq_mem:in(MemQueueModule, Item, Q)).
+append_in_mem(MemQueueModule, Items, Q) ->
+    replayq_mem:in_batch(MemQueueModule, Items, Q).
 
 pop(Q, _BytesMode, _Bytes, 0, AckRef, Acc, _StopFun, _StopFunAcc) ->
     Result = lists:reverse(Acc),
@@ -441,13 +446,14 @@ pop_mem(
             %% put the item back to the queue in reverse order
             InMem2 = replayq_mem:in_r(MemQueueModule, MI, InMem1),
             {Q#{in_mem := InMem2}, ?NOTHING_TO_ACK, lists:reverse(Acc)};
-        {{value, ?MEM_ONLY_ITEM(Sz, Item)}, Rest} ->
+        {{value, ?MEM_ONLY_ITEM(Sz, Item) = MI}, InMem1} ->
             case StopFun(Item, StopFunAcc) of
                 true ->
-                    {Q, ?NOTHING_TO_ACK, lists:reverse(Acc)};
+                    InMem2 = replayq_mem:in_r(MemQueueModule, MI, InMem1),
+                    {Q#{in_mem := InMem2}, ?NOTHING_TO_ACK, lists:reverse(Acc)};
                 NewStopFunAcc ->
                     NewQ = Q#{
-                        in_mem := Rest,
+                        in_mem := InMem1,
                         stats := Stats#{
                             count := TotalCount - 1,
                             bytes := TotalBytes - Sz
@@ -492,13 +498,14 @@ pop2(
             %% put the item back to the queue in reverse order
             InMem2 = replayq_mem:in_r(MemQueueModule, MI, InMem1),
             {Q#{in_mem := InMem2}, AckRef, lists:reverse(Acc)};
-        {{value, ?DISK_CP_ITEM(Id, Sz, Item)}, Rest} ->
+        {{value, ?DISK_CP_ITEM(Id, Sz, Item) = MI}, InMem1} ->
             case StopFun(Item, StopFunAcc) of
                 true ->
-                    {Q, AckRef, lists:reverse(Acc)};
+                    InMem2 = replayq_mem:in_r(MemQueueModule, MI, InMem1),
+                    {Q#{in_mem := InMem2}, AckRef, lists:reverse(Acc)};
                 NewStopFunAcc ->
                     Q1 = Q#{
-                        in_mem := Rest,
+                        in_mem := InMem1,
                         stats := Stats#{
                             count := TotalCount - 1,
                             bytes := TotalBytes - Sz
@@ -506,7 +513,7 @@ pop2(
                     },
                     %% read the next segment in case current is drained
                     NewQ =
-                        case replayq_mem:is_empty(MemQueueModule, Rest) of
+                        case replayq_mem:is_empty(MemQueueModule, InMem1) of
                             true -> open_next_seg(Q1);
                             false -> Q1
                         end,
@@ -563,7 +570,8 @@ do_open_next_seg(
         w_cur := #{segno := WriterSegno, fd := Fd} = WCur0,
         sizer := Sizer,
         marshaller := Marshaller,
-        mem_queue_module := MemQueueModule
+        mem_queue_module := MemQueueModule,
+        in_mem := InMem
     } = Q
 ) ->
     NextSegno = ?NEXT_SEGNO(ReaderSegno),
@@ -587,10 +595,9 @@ do_open_next_seg(
                 WCur0
         end,
     NextSegItems = read_items(Dir, NextSegno, ?NO_COMMIT_HIST, Sizer, Marshaller),
-    MemQueueOpts = get_mem_queue_opts(Config),
     Q#{
         head_segno := NextSegno,
-        in_mem := replayq_mem:from_list(MemQueueModule, MemQueueOpts, NextSegItems),
+        in_mem := replayq_mem:in_batch(MemQueueModule, NextSegItems, InMem),
         w_cur := WCur
     }.
 
@@ -623,14 +630,8 @@ do_find_segnos_to_delete(_Dir, Segnos, ?NO_COMMIT_HIST) ->
     {[], Segnos};
 do_find_segnos_to_delete(Dir, Segnos0, {CommittedSegno, CommittedId}) ->
     {SegnosToDelete, Segnos} = lists:partition(fun(N) -> N < CommittedSegno end, Segnos0),
-    case
-        Segnos =/= [] andalso
-            hd(Segnos) =:= CommittedSegno andalso
-            is_all_consumed(Dir, CommittedSegno, CommittedId)
-    of
+    case is_all_consumed(Dir, CommittedSegno, CommittedId, Segnos) of
         true ->
-            %% assert
-            CommittedSegno = hd(Segnos),
             %% all items in the oldest segment have been consumed,
             %% no need to keep this segment
             {[CommittedSegno | SegnosToDelete], tl(Segnos)};
@@ -640,8 +641,10 @@ do_find_segnos_to_delete(Dir, Segnos0, {CommittedSegno, CommittedId}) ->
 
 %% ALL items are consumed if the committed item ID is no-less than the number
 %% of items in this segment
-is_all_consumed(Dir, CommittedSegno, CommittedId) ->
-    CommittedId >= erlang:length(do_read_items(Dir, CommittedSegno)).
+is_all_consumed(Dir, CommittedSegno, CommittedId, [Segno | _]) when Segno =:= CommittedSegno ->
+    CommittedId >= erlang:length(do_read_items(Dir, CommittedSegno));
+is_all_consumed(_Dir, _CommittedSegno, _CommittedId, _Segnos) ->
+    false.
 
 ensure_deleted(Filename) ->
     case file:delete(Filename) of
