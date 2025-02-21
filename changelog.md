@@ -1,0 +1,2 @@
+- 0.4.0
+  - Add ETS based in-memory queue/segment implementation.
