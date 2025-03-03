@@ -16,8 +16,7 @@ init_test() ->
   Q2 = replayq:open(Config),
   ?assertEqual(0, replayq:count(Q2)),
   ?assertEqual(0, replayq:bytes(Q2)),
-  ok = replayq:close(Q2),
-  ok = cleanup(Dir).
+  ok = replayq:close_and_purge(Q2).
 
 reopen_test() ->
   Dir = ?DIR,
@@ -28,7 +27,7 @@ reopen_test() ->
   Q2 = replayq:open(Config),
   ?assertEqual(2, replayq:count(Q2)),
   ?assertEqual(10, replayq:bytes(Q2)),
-  ok = cleanup(Dir).
+  replayq:close_and_purge(Q2).
 
 %% when popping from in-mem segment, the segment size stats may overflow
 %% but not consuming as much memory
@@ -44,8 +43,7 @@ offload_in_mem_seg_overflow_test() ->
   Q3 = replayq:append(Q2, [<<"item3">>]), %% still in mem
   ?assertMatch([], list_segments(Dir)), % not offloading to disk yet
   ?assertMatch(#{w_cur := #{fd := no_fd}}, Q3),
-  ok = replayq:close(Q3),
-  ok = cleanup(Dir).
+  ok = replayq:close_and_purge(Q3).
 
 offload_file_test() ->
   Dir = ?DIR,
@@ -71,8 +69,7 @@ offload_file_test() ->
   {Q7, AckRef3, Items3} = replayq:pop(Q6, #{}),
   ?assertEqual([<<"item5">>], Items3),
   ok = replayq:ack_sync(Q7, AckRef3),
-  ok = replayq:close(Q7),
-  ok = cleanup(Dir).
+  ok = replayq:close_and_purge(Q7).
 
 offload_reopen_test() ->
   Dir = ?DIR,
@@ -95,7 +92,7 @@ offload_reopen_test() ->
   Q5 = replayq:open(Config),
   ?assertEqual(0, replayq:count(Q5)),
   ?assertEqual(0, replayq:bytes(Q5)),
-  ok = cleanup(Dir).
+  ok = replayq:close_and_purge(Q5).
 
 reopen_v0_test() ->
   Dir = ?DIR,
@@ -110,8 +107,7 @@ reopen_v0_test() ->
   %% do not expect item3 because it was appended to a corrupted tail
   ?assertEqual([<<"item1">>, <<"item2">>], Items),
   ?assert(replayq:is_empty(Q4)),
-  ok = replayq:close(Q4),
-  ok = cleanup(Dir).
+  ok = replayq:close_and_purge(Q4).
 
 append_pop_disk_default_marshaller_test() ->
   Dir = ?DIR,
@@ -152,8 +148,7 @@ test_append_pop_disk(#{dir := Dir} = Config) ->
   ?assertEqual(empty, replayq:peek(Q6)),
   ?assertEqual({Q6, nothing_to_ack, []}, replayq:pop(Q6, #{})),
   ok = replayq:ack(Q6, nothing_to_ack),
-  ok = replayq:close(Q6),
-  ok = cleanup(Dir).
+  ok = replayq:close_and_purge(Q6).
 
 append_pop_mem_default_marshaller_test_test() ->
   Config = #{mem_only => true},
@@ -208,8 +203,7 @@ append_max_total_bytes_disk_test() ->
                            end,
              max_total_bytes => 10
             },
-  test_append_max_total_bytes(Config),
-  ok = cleanup(Dir).
+  test_append_max_total_bytes(Config).
 
 test_append_max_total_bytes(Config) ->
   Q0 = replayq:open(Config),
@@ -218,13 +212,12 @@ test_append_max_total_bytes(Config) ->
   ?assertEqual(10, replayq:overflow(Q1)),
   {Q2, _AckRef, _Items} = replayq:pop(Q1, #{count_limit => 2}),
   ?assertEqual(0, replayq:overflow(Q2)),
-  ok = replayq:close(Q2).
+  ok = replayq:close_and_purge(Q2).
 
 pop_limit_disk_test() ->
   Dir = ?DIR,
   Config = #{dir => Dir, seg_bytes => 1},
-  ok = test_pop_limit(Config),
-  ok = cleanup(Dir).
+  ok = test_pop_limit(Config).
 
 pop_limit_mem_test() ->
   Config = #{mem_only => true},
@@ -240,7 +233,7 @@ test_pop_limit(Config) ->
   {Q4, _AckRef2, Items2} = replayq:pop(Q3, #{count_limit => 10,
                                              bytes_limit => 1}),
   ?assertEqual([<<"item2">>], Items2),
-  ok = replayq:close(Q4).
+  ok = replayq:close_and_purge(Q4).
 
 commit_in_the_middle_test() ->
   Dir = ?DIR,
@@ -261,8 +254,7 @@ commit_in_the_middle_test() ->
   ?assertEqual([<<"item2">>], Items2),
   ?assertEqual(1, replayq:count(Q5)),
   ?assertEqual(5, replayq:bytes(Q5)),
-  ok = replayq:close(Q5),
-  ok = cleanup(Dir).
+  ok = replayq:close_and_purge(Q5).
 
 first_segment_corrupted_test() ->
   Dir = ?DIR,
@@ -282,8 +274,7 @@ first_segment_corrupted_test() ->
   {Q4, _AckRef, Items} = replayq:pop(Q3, #{count_limit => 3}),
   ?assertEqual([Item], Items),
   ?assert(replayq:is_empty(Q4)),
-  ok = replayq:close(Q4),
-  ok = cleanup(Dir).
+  ok = replayq:close_and_purge(Q4).
 
 second_segment_corrupted_test() ->
   Dir = ?DIR,
@@ -304,8 +295,7 @@ second_segment_corrupted_test() ->
   {Q5, _AckRef, Items} = replayq:pop(Q4, #{count_limit => 3}),
   ?assertEqual([Item, Item], Items),
   ?assert(replayq:is_empty(Q5)),
-  ok = replayq:close(Q5),
-  ok = cleanup(Dir).
+  ok = replayq:close_and_purge(Q5).
 
 last_segment_corrupted_test() ->
   Dir = ?DIR,
@@ -334,7 +324,7 @@ last_segment_corrupted_test() ->
   Q8 = replayq:open(Config),
   ?assert(replayq:is_empty(Q8)),
   replayq:ack(Q7, AckRef),
-  ok = cleanup(Dir).
+  replayq:close_and_purge(Q7).
 
 corrupted_segment_test_() ->
   [{"ramdom", fun() -> test_corrupted_segment(<<"foo">>) end},
@@ -360,7 +350,7 @@ test_corrupted_segment(BadBytes) ->
   ?assertEqual([<<"item1">>, Item2], Items),
   ?assert(replayq:is_empty(Q4)),
   ok = replayq:close(Q4),
-  ok = cleanup(Dir).
+  ok = replayq:close_and_purge(Q4).
 
 comitter_crash_test() ->
   Dir = ?DIR,
@@ -407,16 +397,9 @@ corrupted_commit_test() ->
   ok = file:write_file(CommitFile, <<"bad-erlang-term">>),
   %% assert no crash
   Q4 = replayq:open(Config),
-  ok = replayq:close(Q4),
-  ok = cleanup(Dir).
+  ok = replayq:close_and_purge(Q4).
 
 %% helpers ===========================================================
-
-cleanup(Dir) ->
-  Files = list_segments(Dir),
-  ok = lists:foreach(fun(F) -> ok = file:delete(filename:join(Dir, F)) end, Files),
-  _ = file:delete(filename:join(Dir, "COMMIT")),
-  ok = file:del_dir(Dir).
 
 list_segments(Dir) -> filelib:wildcard("*."?SUFFIX, Dir).
 
