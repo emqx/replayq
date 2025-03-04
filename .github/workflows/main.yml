@@ -1,25 +1,25 @@
 name: CI
-on: [push, pull_request]
+on: [pull_request]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        otp: [23.2, 24.0.2]
+        otp: [['24.3', '3.21.0'], ['25.3', '3.23.0']]
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4.2.1
+      - name: Setup Erlang/OTP
+        uses: erlef/setup-beam@v1
         with:
-          submodules: recursive
-      - uses: gleam-lang/setup-erlang@v1.1.2
-        with:
-          otp-version: ${{ matrix.otp }}
+          otp-version: ${{ matrix.otp[0] }}
+          rebar3-version: ${{ matrix.otp[1] }}
       - run: |
           make
       - name: Archive CT Logs
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4.4.3
         with:
-          name: ct-logs
+          name: ct-logs-${{ matrix.otp[0] }}
           path: _build/test/
           retention-days: 1

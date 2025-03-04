@@ -1,5 +1,5 @@
 %% -*-: erlang -*-
-{"0.3.5.1",
+{"0.3.5.2",
   [ {<<".*">>, [ {load_module, replayq, brutal_purge, soft_purge, []} ]} ],
   [ {<<".*">>, [ {load_module, replayq, brutal_purge, soft_purge, []} ]} ]
 }.

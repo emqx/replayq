@@ -74,9 +74,7 @@ prop_op_list(IsOffload) ->
   proper_types:list(proper_types:oneof(Union)).
 
 delete_dir(Dir) ->
-  lists:foreach(fun(F) -> ok = file:delete(filename:join([Dir, F])) end,
-                filelib:wildcard("*", Dir)),
-  ok = file:del_dir(Dir).
+  ok = file:del_dir_r(Dir).
 
 compare_stats(MQ, DQ) ->
   ?assertEqual(replayq:count(MQ), replayq:count(DQ)),

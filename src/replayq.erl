@@ -1,6 +1,6 @@
 -module(replayq).
 
--export([open/1, close/1]).
+-export([open/1, close/1, close_and_purge/1]).
 -export([append/2, pop/2, ack/2, ack_sync/2, peek/1, overflow/1]).
 -export([count/1, bytes/1, is_empty/1, is_mem_only/1]).
 %% exported for troubleshooting
@@ -125,10 +125,35 @@ close(#{w_cur := W_Cur, committer := Pid} = Q) ->
       ok
   end,
   ok = maybe_dump_back_to_disk(Q),
-  do_close(W_Cur).
+  true = do_close(W_Cur),
+  ok.
 
-do_close(#{fd := ?NO_FD}) -> ok;
-do_close(#{fd := Fd}) -> file:close(Fd).
+do_close(#{fd := ?NO_FD}) -> true;
+do_close(#{fd := Fd}) ->
+  case file:close(Fd) of
+    ok ->
+      true;
+    {error, Reason} ->
+      Reason =:= einval orelse error(Reason)
+  end.
+
+%% @doc Close the queue and purge all the files on disk.
+close_and_purge(#{config := mem_only}) ->
+  ok;
+close_and_purge(#{config := #{dir := Dir}} = Q) ->
+  close(Q),
+  del_dir_r(Dir).
+
+-if(?OTP_RELEASE >= 24).
+del_dir_r(Dir) ->
+  ok = file:del_dir_r(Dir).
+-else.
+del_dir_r(Dir) ->
+  Files = list_segments(Dir),
+  ok = lists:foreach(fun(F) -> ok = file:delete(filename:join(Dir, F)) end, Files),
+  _ = file:delete(filename:join(Dir, "COMMIT")),
+  ok = file:del_dir(Dir).
+-endif.
 
 %% In case of offload mode, dump the unacked (and un-popped) on disk
 %% before close. this serves as a best-effort data loss protection
@@ -209,7 +234,7 @@ append(#{config := #{seg_bytes := BytesLimit, dir := Dir} = Config,
   W_Cur =
     case is_segment_full(W_Cur1, TotalBytes, BytesLimit, ReaderSegno, IsOffload) of
       true ->
-        ok = do_close(W_Cur1),
+        true = do_close(W_Cur1),
         open_segment(Dir, ?NEXT_SEGNO(WriterSegno)); %% get ready for the next append
       false ->
         W_Cur1
@@ -410,7 +435,7 @@ do_open_next_seg(#{config := #{dir := Dir} = Config,
       true ->
         %% reader has caught up to latest segment in offload mode,
         %% close the writer's fd. Continue in mem-only mode for the head segment
-        ok = do_close(WCur0),
+        true = do_close(WCur0),
         WCur0#{fd := ?NO_FD};
       false ->
         WCur0
