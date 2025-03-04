@@ -1,29 +1,26 @@
 name: CI
-on: [push, pull_request]
+on: [pull_request]
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        otp: ['26.2.5', '27.1']
-        rebar3: ['3.22.1']
+        otp: [['26.2.5', '3.22.1'], ['27.1', '3.22.1']]
     steps:
       - name: Checkout
         uses: actions/checkout@v4.2.1
-        with:
-          submodules: recursive
       - name: Setup Erlang/OTP
-        uses: erlef/setup-beam@v1.17.5
+        uses: erlef/setup-beam@v1
         with:
-          otp-version: ${{ matrix.otp }}
-          rebar3-version: ${{ matrix.rebar3 }}
+          otp-version: ${{ matrix.otp[0] }}
+          rebar3-version: ${{ matrix.otp[1] }}
       - run: |
           make fmt-check
           make
       - name: Archive CT Logs
         uses: actions/upload-artifact@v4.4.3
         with:
-          name: ct-logs-${{ matrix.otp }}
+          name: ct-logs-${{ matrix.otp[0] }}
           path: _build/test/
           retention-days: 1

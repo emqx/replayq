@@ -1,5 +1,0 @@
-%% -*- mode: erlang -*-
-{VSN,
-  [ {<<".*">>, [ {load_module, replayq, brutal_purge, soft_purge, []} ]} ],
-  [ {<<".*">>, [ {load_module, replayq, brutal_purge, soft_purge, []} ]} ]
-}.
