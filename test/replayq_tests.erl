@@ -350,7 +350,10 @@ test_corrupted_segment(BadBytes) ->
   ?assertEqual([<<"item1">>, Item2], Items),
   ?assert(replayq:is_empty(Q4)),
   ok = replayq:close(Q4),
-  ok = replayq:close_and_purge(Q4).
+  %% purge after close.
+  ok = replayq:close_and_purge(Q4),
+  %% test that it's ok to close again.
+  ok = replayq:close(Q4).
 
 comitter_crash_test() ->
   Dir = ?DIR,
