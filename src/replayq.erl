@@ -179,33 +179,34 @@ close(#{w_cur := W_Cur, committer := Pid, in_mem := InMem, mem_queue_module := M
     ok = replayq_registry:deregister_committer(self()),
     Res.
 
-do_close(#{fd := ?NO_FD}) -> true;
+do_close(#{fd := ?NO_FD}) ->
+    ok;
 do_close(#{fd := Fd}) ->
-  case file:close(Fd) of
-    ok ->
-      ok;
-    {error, einval} ->
-      ok;
-    {error, Reason} ->
-      {error, Reason}
-  end.
+    case file:close(Fd) of
+        ok ->
+            ok;
+        {error, einval} ->
+            ok;
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 %% @doc Close the queue and purge all the files on disk.
-close_and_purge(#{config := mem_only}) ->
-  ok;
+close_and_purge(#{config := mem_only} = Q) ->
+    close(Q);
 close_and_purge(#{config := #{dir := Dir}} = Q) ->
-  close(Q),
-  del_dir_r(Dir).
+    close(Q),
+    del_dir_r(Dir).
 
 -if(?OTP_RELEASE >= 24).
 del_dir_r(Dir) ->
-  ok = file:del_dir_r(Dir).
+    ok = file:del_dir_r(Dir).
 -else.
 del_dir_r(Dir) ->
-  Files = list_segments(Dir),
-  ok = lists:foreach(fun(F) -> ok = file:delete(filename:join(Dir, F)) end, Files),
-  _ = file:delete(filename:join(Dir, "COMMIT")),
-  ok = file:del_dir(Dir).
+    Files = list_segments(Dir),
+    ok = lists:foreach(fun(F) -> ok = file:delete(filename:join(Dir, F)) end, Files),
+    _ = file:delete(filename:join(Dir, "COMMIT")),
+    ok = file:del_dir(Dir).
 -endif.
 
 %% In case of offload mode, dump the unacked (and un-popped) on disk

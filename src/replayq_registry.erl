@@ -83,7 +83,7 @@ handle_call(#register_committer{dir = Dir, pid = Pid}, _From, State0) ->
         #{Dir := SomePid} ->
             case is_process_alive(SomePid) of
                 true ->
-                    {reply, {error, already_registered}, State0};
+                    {reply, {error, {already_registered, Dir}}, State0};
                 false ->
                     {_, State1} = pop_committer(State0, SomePid),
                     State = do_register_committer(State1, Dir, Pid),
@@ -107,7 +107,7 @@ handle_call(#register_slot_owner{pid = Pid}, _From, #{slot_owners := Owners0} = 
             Ref = erlang:monitor(process, Pid),
             {reply, ok, State0#{slot_owners := Owners0#{Pid => Ref}}};
         true ->
-            {reply, {error, already_registered}, State0}
+            {reply, {error, {already_registered, Pid}}, State0}
     end;
 handle_call(#deregister_slot_owner{pid = Pid}, _From, #{slot_owners := Owners0} = State0) ->
     case maps:get(Pid, Owners0, undefined) of
