@@ -15,7 +15,7 @@
 %%--------------------------------------------------------------------
 -module(replayq).
 
--export([open/1, close/1]).
+-export([open/1, close/1, close_and_purge/1]).
 -export([append/2, pop/2, ack/2, ack_sync/2, peek/1, overflow/1]).
 -export([count/1, bytes/1, is_empty/1, is_mem_only/1]).
 %% exported for troubleshooting
@@ -179,8 +179,35 @@ close(#{w_cur := W_Cur, committer := Pid, in_mem := InMem, mem_queue_module := M
     ok = replayq_registry:deregister_committer(self()),
     Res.
 
-do_close(#{fd := ?NO_FD}) -> ok;
-do_close(#{fd := Fd}) -> file:close(Fd).
+do_close(#{fd := ?NO_FD}) ->
+    ok;
+do_close(#{fd := Fd}) ->
+    case file:close(Fd) of
+        ok ->
+            ok;
+        {error, einval} ->
+            ok;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% @doc Close the queue and purge all the files on disk.
+close_and_purge(#{config := mem_only} = Q) ->
+    close(Q);
+close_and_purge(#{config := #{dir := Dir}} = Q) ->
+    close(Q),
+    del_dir_r(Dir).
+
+-if(?OTP_RELEASE >= 24).
+del_dir_r(Dir) ->
+    ok = file:del_dir_r(Dir).
+-else.
+del_dir_r(Dir) ->
+    Files = list_segments(Dir),
+    ok = lists:foreach(fun(F) -> ok = file:delete(filename:join(Dir, F)) end, Files),
+    _ = file:delete(filename:join(Dir, "COMMIT")),
+    ok = file:del_dir(Dir).
+-endif.
 
 %% In case of offload mode, dump the unacked (and un-popped) on disk
 %% before close. this serves as a best-effort data loss protection

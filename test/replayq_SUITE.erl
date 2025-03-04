@@ -70,8 +70,7 @@ t_init(CtConfig) ->
     Q2 = open(CtConfig, Config),
     ?assertEqual(0, replayq:count(Q2)),
     ?assertEqual(0, replayq:bytes(Q2)),
-    ok = replayq:close(Q2),
-    ok = cleanup(Dir).
+    ok = replayq:close_and_purge(Q2).
 
 t_reopen(CtConfig) ->
     Dir = ?DIR,
@@ -82,7 +81,9 @@ t_reopen(CtConfig) ->
     Q2 = open(CtConfig, Config),
     ?assertEqual(2, replayq:count(Q2)),
     ?assertEqual(10, replayq:bytes(Q2)),
-    ok = cleanup(Dir).
+    ok = replayq:close(Q2),
+    %% ok to close after closed already
+    ok = replayq:close_and_purge(Q2).
 
 t_volatile(CtConfig) ->
     Dir = ?DIR,
@@ -95,8 +96,7 @@ t_volatile(CtConfig) ->
     ?assertEqual(0, replayq:bytes(Q2)),
     {Q3, _QAckRef, Items} = replayq:pop(Q2, #{count_limit => 10}),
     ?assertEqual([], Items),
-    ok = replayq:close(Q3),
-    ok = cleanup(Dir).
+    ok = replayq:close_and_purge(Q3).
 
 %% when popping from in-mem segment, the segment size stats may overflow
 %% but not consuming as much memory
@@ -117,7 +117,7 @@ t_offload_in_mem_seg_overflow(CtConfig) ->
     ?assertMatch([], list_segments(Dir)),
     ?assertMatch(#{w_cur := #{fd := no_fd}}, Q3),
     ok = replayq:close(Q3),
-    ok = cleanup(Dir).
+    ok = replayq:close_and_purge(Q3).
 
 t_offload_file(CtConfig) ->
     Dir = ?DIR,
@@ -149,7 +149,7 @@ t_offload_file(CtConfig) ->
     ?assertEqual([<<"item5">>], Items3),
     ok = replayq:ack_sync(Q7, AckRef3),
     ok = replayq:close(Q7),
-    ok = cleanup(Dir).
+    ok = replayq:close_and_purge(Q7).
 
 t_offload_reopen(CtConfig) ->
     Dir = ?DIR,
@@ -173,7 +173,7 @@ t_offload_reopen(CtConfig) ->
     Q5 = open(CtConfig, Config),
     ?assertEqual(0, replayq:count(Q5)),
     ?assertEqual(0, replayq:bytes(Q5)),
-    ok = cleanup(Dir).
+    ok = replayq:close_and_purge(Q5).
 
 t_reopen_v0(CtConfig) ->
     Dir = ?DIR,
@@ -191,8 +191,7 @@ t_reopen_v0(CtConfig) ->
     %% do not expect item3 because it was appended to a corrupted tail
     ?assertEqual([<<"item1">>, <<"item2">>], Items),
     ?assert(replayq:is_empty(Q4)),
-    ok = replayq:close(Q4),
-    ok = cleanup(Dir).
+    ok = replayq:close_and_purge(Q4).
 
 t_append_pop_disk_default_marshaller(CtConfig) ->
     Dir = ?DIR,
@@ -212,7 +211,7 @@ t_append_pop_disk_my_marshaller(CtConfig) ->
     },
     test_append_pop_disk(CtConfig, Config).
 
-test_append_pop_disk(CtConfig, #{dir := Dir} = Config) ->
+test_append_pop_disk(CtConfig, Config) ->
     Q0 = open(CtConfig, Config),
     Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
     Q2 = replayq:append(Q1, [<<"item3">>]),
@@ -239,8 +238,7 @@ test_append_pop_disk(CtConfig, #{dir := Dir} = Config) ->
     ?assertEqual(empty, replayq:peek(Q6)),
     ?assertEqual({Q6, nothing_to_ack, []}, replayq:pop(Q6, #{})),
     ok = replayq:ack(Q6, nothing_to_ack),
-    ok = replayq:close(Q6),
-    ok = cleanup(Dir).
+    ok = replayq:close_and_purge(Q6).
 
 t_append_pop_mem_default_marshaller(CtConfig) ->
     Config = #{mem_only => true},
@@ -288,8 +286,7 @@ t_append_max_total_bytes_mem(CtConfig) ->
         end,
         max_total_bytes => 10
     },
-    test_append_max_total_bytes(CtConfig, Config),
-    ok.
+    test_append_max_total_bytes(CtConfig, Config).
 
 t_append_max_total_bytes_disk(CtConfig) ->
     Dir = ?DIR,
@@ -303,8 +300,7 @@ t_append_max_total_bytes_disk(CtConfig) ->
         end,
         max_total_bytes => 10
     },
-    test_append_max_total_bytes(CtConfig, Config),
-    ok = cleanup(Dir).
+    test_append_max_total_bytes(CtConfig, Config).
 
 test_append_max_total_bytes(CtConfig, Config) ->
     Q0 = open(CtConfig, Config),
@@ -313,13 +309,12 @@ test_append_max_total_bytes(CtConfig, Config) ->
     ?assertEqual(10, replayq:overflow(Q1)),
     {Q2, _AckRef, _Items} = replayq:pop(Q1, #{count_limit => 2}),
     ?assertEqual(0, replayq:overflow(Q2)),
-    ok = replayq:close(Q2).
+    ok = replayq:close_and_purge(Q2).
 
 t_pop_limit_disk(CtConfig) ->
     Dir = ?DIR,
     Config = #{dir => Dir, seg_bytes => 1},
-    ok = test_pop_limit(CtConfig, Config),
-    ok = cleanup(Dir).
+    ok = test_pop_limit(CtConfig, Config).
 
 t_pop_limit_mem(CtConfig) ->
     Config = #{mem_only => true},
@@ -339,7 +334,7 @@ test_pop_limit(CtConfig, Config) ->
         bytes_limit => 1
     }),
     ?assertEqual([<<"item2">>], Items2),
-    ok = replayq:close(Q4).
+    ok = replayq:close_and_purge(Q4).
 
 t_commit_in_the_middle(CtConfig) ->
     Dir = ?DIR,
@@ -360,8 +355,7 @@ t_commit_in_the_middle(CtConfig) ->
     ?assertEqual([<<"item2">>], Items2),
     ?assertEqual(1, replayq:count(Q5)),
     ?assertEqual(5, replayq:bytes(Q5)),
-    ok = replayq:close(Q5),
-    ok = cleanup(Dir).
+    ok = replayq:close_and_purge(Q5).
 
 t_first_segment_corrupted(CtConfig) ->
     Dir = ?DIR,
@@ -383,8 +377,7 @@ t_first_segment_corrupted(CtConfig) ->
     {Q4, _AckRef, Items} = replayq:pop(Q3, #{count_limit => 3}),
     ?assertEqual([Item], Items),
     ?assert(replayq:is_empty(Q4)),
-    ok = replayq:close(Q4),
-    ok = cleanup(Dir).
+    ok = replayq:close_and_purge(Q4).
 
 t_second_segment_corrupted(CtConfig) ->
     Dir = ?DIR,
@@ -408,8 +401,7 @@ t_second_segment_corrupted(CtConfig) ->
     {Q5, _AckRef, Items} = replayq:pop(Q4, #{count_limit => 3}),
     ?assertEqual([Item, Item], Items),
     ?assert(replayq:is_empty(Q5)),
-    ok = replayq:close(Q5),
-    ok = cleanup(Dir).
+    ok = replayq:close_and_purge(Q5).
 
 t_last_segment_corrupted(CtConfig) ->
     Dir = ?DIR,
@@ -441,7 +433,7 @@ t_last_segment_corrupted(CtConfig) ->
     Q8 = open(CtConfig, Config),
     ?assert(replayq:is_empty(Q8)),
     replayq:ack(Q7, AckRef),
-    ok = cleanup(Dir).
+    replayq:close_and_purge(Q7).
 
 t_corrupted_segment(CtConfig) ->
     ?assert(test_corrupted_segment(CtConfig, <<"foo">>)),
@@ -467,8 +459,7 @@ test_corrupted_segment(CtConfig, BadBytes) ->
     %% do not expect item3 because it was appended to a corrupted tail
     ?assertEqual([<<"item1">>, Item2], Items),
     ?assert(replayq:is_empty(Q4)),
-    ok = replayq:close(Q4),
-    ok = cleanup(Dir),
+    ok = replayq:close_and_purge(Q4),
     true.
 
 t_comitter_crash(CtConfig) ->
@@ -501,7 +492,8 @@ t_same_directory_committer_clash(CtConfig) ->
     try open(CtConfig, Config) of
         Q2 -> error({"should not allow opening a second replayq", Q2})
     catch
-        error:{badmatch, {error, already_registered}} ->
+        error:{badmatch, {error, {already_registered, Dir1}}} ->
+            ?assertEqual(iolist_to_binary(Dir), Dir1),
             ok
     end,
     replayq:close(Q1),
@@ -623,8 +615,7 @@ t_corrupted_commit(CtConfig) ->
     ok = file:write_file(CommitFile, <<"bad-erlang-term">>),
     %% assert no crash
     Q4 = open(CtConfig, Config),
-    ok = replayq:close(Q4),
-    ok = cleanup(Dir).
+    ok = replayq:close_and_purge(Q4).
 
 t_pop_bytes_mem(CtConfig) ->
     Config = #{
@@ -645,11 +636,8 @@ t_pop_bytes_disk(CtConfig) ->
         sizer => fun(Item) -> size(Item) end
     },
     ok = test_pop_bytes(CtConfig, Config, default),
-    ok = cleanup(Dir),
     ok = test_pop_bytes(CtConfig, Config, at_most),
-    ok = cleanup(Dir),
-    ok = test_pop_bytes(CtConfig, Config, at_least),
-    ok = cleanup(Dir).
+    ok = test_pop_bytes(CtConfig, Config, at_least).
 
 test_pop_bytes(CtConfig, Config, BytesMode) ->
     Q0 = open(CtConfig, Config),
@@ -675,8 +663,7 @@ test_pop_bytes(CtConfig, Config, BytesMode) ->
                 spop(Q1, #{count_limit => 10, bytes_limit => {at_least, ItemSize + 1}})
             )
     end,
-    ok = replayq:close(Q0),
-    ok.
+    ok = replayq:close_and_purge(Q0).
 
 owner_down_cause_purge(CtConfig) ->
     {Owner, Ref} = spawn_monitor(fun() ->
@@ -710,12 +697,6 @@ owner_down_cause_purge(CtConfig) ->
 spop(Q, Opts) ->
     {_Q1, _AckRef, Items} = replayq:pop(Q, Opts),
     Items.
-
-cleanup(Dir) ->
-    Files = list_segments(Dir),
-    ok = lists:foreach(fun(F) -> ok = file:delete(filename:join(Dir, F)) end, Files),
-    _ = file:delete(filename:join(Dir, "COMMIT")),
-    ok = file:del_dir(Dir).
 
 list_segments(Dir) -> filelib:wildcard("*." ?SUFFIX, Dir).
 

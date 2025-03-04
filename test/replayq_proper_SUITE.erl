@@ -106,8 +106,7 @@ prop_run(MemQueueModule, IsOffload) ->
                 true
             after
                 replayq:close(MQ),
-                replayq:close(DQ),
-                ok = delete_dir(Dir)
+                replayq:close_and_purge(DQ)
             end
         end
     ).
@@ -157,13 +156,6 @@ prop_op_list(IsOffload) ->
             false -> [reopen | Base]
         end,
     proper_types:list(proper_types:oneof(Union)).
-
-delete_dir(Dir) ->
-    lists:foreach(
-        fun(F) -> ok = file:delete(filename:join([Dir, F])) end,
-        filelib:wildcard("*", Dir)
-    ),
-    ok = file:del_dir(Dir).
 
 compare_stats(MQ, DQ) ->
     ?assertEqual(replayq:count(MQ), replayq:count(DQ)),

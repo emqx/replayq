@@ -45,7 +45,13 @@ new(_) ->
 %% @doc Peek all items from the queue.
 -spec peek_all(queue()) -> [term()].
 peek_all(#{ets_tab := Tab}) ->
-    lists:map(fun({_Id, Item}) -> Item end, ets:tab2list(Tab)).
+    try ets:tab2list(Tab) of
+        L ->
+            lists:map(fun({_Id, Item}) -> Item end, L)
+    catch
+        error:badarg ->
+            []
+    end.
 
 %% @doc Peek the front item of the queue.
 -spec peek(queue()) -> empty | {value, term()}.
