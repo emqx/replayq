@@ -1,3 +1,6 @@
+- 0.5.0
+  - Add API to check if it is currently writing to disk.
+
 - 0.4.1
   - Port `replayq:close_and_purge/1` from `dev-0.3.5` to master
 

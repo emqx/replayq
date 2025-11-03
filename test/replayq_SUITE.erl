@@ -510,6 +510,44 @@ t_is_mem_only_disk(CtConfig) ->
     false = replayq:is_mem_only(Q),
     ok = replayq:close(Q).
 
+t_is_writing_to_disk_mem_only(CtConfig) ->
+    Q0 = open(CtConfig, #{mem_only => true}),
+    false = replayq:is_writing_to_disk(Q0),
+    Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
+    false = replayq:is_writing_to_disk(Q1),
+    Q2 = replayq:append(Q1, [<<"item3">>]),
+    false = replayq:is_writing_to_disk(Q2),
+    ok = replayq:close(Q2).
+
+t_is_writing_to_disk_disk(CtConfig) ->
+    Dir = ?DIR,
+    Config = #{dir => Dir, seg_bytes => 100},
+    Q0 = open(CtConfig, Config),
+    true = replayq:is_writing_to_disk(Q0),
+    Q1 = replayq:append(Q0, [<<"item1">>, <<"item2">>]),
+    true = replayq:is_writing_to_disk(Q1),
+    Q2 = replayq:append(Q1, [<<"item3">>]),
+    true = replayq:is_writing_to_disk(Q2),
+    ok = replayq:close(Q2).
+
+t_is_writing_to_disk_offload(CtConfig) ->
+    Dir = ?DIR,
+    Config = #{dir => Dir, seg_bytes => 10, offload => true},
+    Q0 = open(CtConfig, Config),
+    % Initially in memory, should return false
+    false = replayq:is_writing_to_disk(Q0),
+    Q1 = replayq:append(Q0, [<<"item1">>]),
+    % Still in memory
+    false = replayq:is_writing_to_disk(Q1),
+    % Trigger creation of seg 2 by appending more items
+    Q2 = replayq:append(Q1, [<<"item2">>]),
+    % Now writing to disk segment, should return true
+    true = replayq:is_writing_to_disk(Q2),
+    Q3 = replayq:append(Q2, [<<"item3">>, <<"item4">>]),
+    % Still writing to disk
+    true = replayq:is_writing_to_disk(Q3),
+    ok = replayq:close_and_purge(Q3).
+
 t_stop_before_mem(CtConfig) ->
     Config = #{mem_only => true},
     stop_before_test(CtConfig, Config),
